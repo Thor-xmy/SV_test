@@ -229,7 +229,7 @@ class SurgicalQAModel(nn.Module):
             }
             return score, features_dict
         else:
-            return score
+            return score, mask_loss
 
     def compute_loss(self, score_pred, score_gt, mask_loss=None, lambda_mask=0.1):
         """

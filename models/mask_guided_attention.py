@@ -34,8 +34,7 @@ class MaskGuidedAttention(nn.Module):
     """
     def __init__(self,
                  feature_dim=832,
-                 use_mask_loss=True,
-                 enable_temporal_smoothing=True):
+                 use_mask_loss=True, enable_temporal_smoothing=True):
         """
         Args:
             feature_dim: Input feature channel dimension
@@ -121,34 +120,32 @@ class MaskGuidedAttention(nn.Module):
         """
         B, T, H, W = masks.shape
 
-        # Prepare mask features
-        # Stack along channel dimension for mean/max operations
-        masks_expanded = masks.unsqueeze(1)  # (B, 1, T, H, W)
-
-        # Mean attention (average over spatial dimensions)
-        A_mean = F.avg_pool2d(masks_expanded, kernel_size=H, stride=1, padding=H//2)
-        A_mean = F.avg_pool2d(A_mean, kernel_size=W, stride=1, padding=W//2)
-        # This becomes (B, 1, T, 1, 1) -> squeeze -> (B, T)
-
-        # Max attention
-        A_max = F.max_pool2d(masks_expanded, kernel_size=H, stride=1, padding=H//2)
-        A_max = F.max_pool2d(A_max, kernel_size=W, stride=1, padding=W//2)
-        # This becomes (B, 1, T, 1, 1) -> squeeze -> (B, T)
+        # Stack mean and max along channel dimension
+        # Mean attention: average across spatial dimensions for each frame
+        A_mean = masks.mean(dim=(2, 3), keepdim=True)  # (B, T, 1, 1)
+        # Max attention: max across spatial dimensions for each frame
+        A_max = masks.amax(dim=(2, 3), keepdim=True)[0]  # (B, T, 1, 1)
 
         # Stack mean and max for aggregation
         A_stacked = torch.cat([A_mean, A_max], dim=1)  # (B, 2, T, 1, 1)
 
-        # Aggregate through learnable function
         # Reshape for 2D conv: (B*T, 2, 1, 1)
-        B_T = A_stacked.size(0) * A_stacked.size(2)
-        A_reshaped = A_stacked.permute(0, 2, 1, 3, 4).reshape(B_T, 2, 1, 1)
+        BT = B * T
+        A_reshaped = A_stacked.permute(0, 2, 1, 3, 4).reshape(BT, 2, 1, 1)
         A_agg = self.aggregation(A_reshaped)  # (B*T, 1, 1, 1)
-        A_agg = A_agg.reshape(B, T, 1, 1).squeeze(-1)  # (B, T, 1, 1)
 
-        # Resize to target size
-        A_agg = F.interpolate(A_agg, size=target_size, mode='bilinear', align_corners=False)
+        # Reshape back to (B, 1, T, 1, 1) then to (B, T, H', W')
+        A_agg = A_agg.reshape(B, T, 1, 1).squeeze(2)  # (B, T, 1, 1)
 
-        return A_agg.squeeze(1)  # (B, T, H', W')
+        # Resize to target size using bilinear interpolation
+        # Need 4D tensor for bilinear: (B*T, C, H, W)
+        A_agg = A_agg.permute(0, 2, 1, 3)  # (B, 1, T, 1)
+        A_agg = A_agg.reshape(BT, 1, 1, 1)  # (B*T, 1, 1, 1)
+        A_agg = F.interpolate(A_agg, size=target_size, mode='bilinear', align_corners=False)  # (B*T, 1, H', W')
+        A_agg = A_agg.reshape(B, T, 1, target_size[0], target_size[1])  # (B, T, 1, H', W')
+        A_agg = A_agg.squeeze(2)  # (B, T, H', W')
+
+        return A_agg
 
     def forward(self, dynamic_features, masks, return_attention_map=False):
         """
@@ -176,25 +173,29 @@ class MaskGuidedAttention(nn.Module):
         mask_attention = self._generate_attention_from_masks(masks, target_size)  # (B, T, H, W)
 
         # 3. Project mask to match feature dimensions
-        # Mask is (B, T, H, W), convert to (B, 1, T, H, W)
-        masks_3d = masks.unsqueeze(1)
-        masks_3d = F.interpolate(masks_3d, size=(T, H, W), mode='trilinear', align_corners=False)
-
-        # Project through conv layers
-        projected_mask = self.mask_proj(masks_3d.squeeze(1))  # (B, 1, T, H, W)
+        # Process each frame independently with 2D conv
+        BT = B * T
+        masks_2d = masks.reshape(BT, 1, masks.size(2), masks.size(3))  # (B*T, 1, H_mask, W_mask)
+        masks_2d = F.interpolate(masks_2d, size=(H, W), mode='bilinear', align_corners=False)  # (B*T, 1, H, W)
+        projected_mask = self.mask_proj(masks_2d)  # (B*T, 1, H, W)
+        projected_mask = projected_mask.reshape(B, T, H, W)  # (B, T, H, W)
 
         # 4. Generate learned attention from features
         feature_attention = self.attention_conv(dynamic_features)  # (B, 1, T, H, W)
+        feature_attention = feature_attention.squeeze(1)  # (B, T, H, W)
 
         # 5. Combine mask attention and learned attention
         # Learnable fusion weight
         combined_attention = (
-            self.alpha * mask_attention + (1 - self.alpha) * feature_attention.squeeze(1)
-        ).unsqueeze(1)  # (B, 1, T, H, W)
+            self.alpha * mask_attention + (1 - self.alpha) * feature_attention
+        )  # (B, T, H, W)
+
+        # Add channel dimension back for multiplication
+        combined_attention = combined_attention.unsqueeze(1)  # (B, 1, T, H, W)
 
         # 6. Apply attention to features (element-wise multiplication)
         # F_dy = F_clip * (A + I) where I is identity
-        masked_features = dynamic_features * (combined_attention + 1.0)  # (B, C, T, H, W)
+        masked_features = dynamic_featureskt * (combined_attention + 1.0)  # (B, C, T, H, W)
 
         # 7. Global pooling to get compact representation
         pooled_features = F.adaptive_avg_pool3d(masked_features, (1, 1, 1))  # (B, C, 1, 1, 1)
@@ -205,10 +206,13 @@ class MaskGuidedAttention(nn.Module):
         if self.use_mask_loss and self.training:
             # L2 loss between attention and ground-truth mask
             # Loss_mask = (1/(T*W*H)) * sum(||A - M_gt||^2)
-            target_mask_combined = masks_3d.squeeze(1)  # (B, T, H, W)
+            target_mask = masks.reshape(BT, 1, masks.size(2), masks.size(3))  # (B*T, 1, H_mask, W_mask)
+            target_mask = F.interpolate(target_mask, size=(H, W), mode='bilinear', align_corners=False)  # (B*T, 1, H, W)
+            target_mask = target_mask.reshape(B, T, H, W)  # (B, T, H, W)
+
             pred_attention = combined_attention.squeeze(1)  # (B, T, H, W)
 
-            loss = F.mse_loss(pred_attention, target_mask_combined)
+            loss = F.mse_loss(pred_attention, target_mask)
             mask_loss = loss
 
         if return_attention_map:

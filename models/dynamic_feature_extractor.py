@@ -80,6 +80,74 @@ class MixedConv3D(nn.Module):
         return out
 
 
+class InceptionModule3D(nn.Module):
+    """
+    3D Inception module for I3D backbone.
+
+    Branches:
+    - b0: 1x1x1 conv
+    - b1: 1x1x1 -> 3x3x3 conv
+    - b2: 1x1x1 -> 3x3x3 conv
+    - b3: maxpool3d -> 1x1x1 conv
+    """
+    def __init__(self, in_channels, out_channels):
+        """
+        Args:
+            in_channels: Number of input channels
+            out_channels: List of [b0, b1a, b1b, b2a, b2b, b3b] output channels
+        """
+        super().__init__()
+
+        # Branch 0: 1x1x1
+        self.b0 = nn.Conv3d(in_channels, out_channels[0], kernel_size=1)
+
+        # Branch 1: 1x1x1 -> 3x3x3
+        self.b1a = nn.Conv3d(in_channels, out_channels[1], kernel_size=1)
+        self.b1b = nn.Conv3d(out_channels[1], out_channels[2], kernel_size=(3, 3, 3), padding=(1, 1, 1))
+
+        # Branch 2: 1x1x1 -> 3x3x3
+        self.b2a = nn.Conv3d(in_channels, out_channels[3], kernel_size=1)
+        self.b2b = nn.Conv3d(out_channels[3], out_channels[4], kernel_size=(3, 3, 3), padding=(1, 1, 1))
+
+        # Branch 3: maxpool3d -> 1x1x1
+        self.b3 = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1))
+        self.b3b = nn.Conv3d(in_channels, out_channels[5], kernel_size=1)
+
+        # Batch normalization and ReLU
+        self.bn = nn.BatchNorm3d(sum(out_channels))
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (B, C, T, H, W)
+        Returns:
+            out: (B, sum(out_channels), T, H, W)
+        """
+        # Branch 0
+        b0_out = self.b0(x)
+
+        # Branch 1
+        b1a_out = self.b1a(x)
+        b1_out = self.b1b(b1a_out)
+
+        # Branch 2
+        b2a_out = self.b2a(x)
+        b2_out = self.b2b(b2a_out)
+
+        # Branch 3
+        b3_out = self.b3(x)
+        b3_out = b3b_out = self.b3b(b3_out)
+
+        # Concatenate all branches
+        out = torch.cat([b0_out, b1_out, b2_out, b3_out], dim=1)
+
+        out = self.bn(out)
+        out = self.relu(out)
+
+        return out
+
+
 class I3DBackbone(nn.Module):
     """
     Simplified I3D backbone for dynamic feature extraction.
@@ -104,38 +172,26 @@ class I3DBackbone(nn.Module):
         self.maxpool2 = nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1))
 
         # Mixed_3b, Mixed_3c
-        self.mixed_3b = self._inception_module(192, [64, 96, 128, 16, 32, 32])
-        self.mixed_3c = self._inception_module(256, [128, 128, 192, 32, 96, 64])
+        self.mixed_3b = InceptionModule3D(192, [64, 96, 128, 16, 32, 32])
+        self.mixed_3c = InceptionModule3D(256, [128, 128, 192, 32, 96, 64])
         self.maxpool3 = nn.MaxPool3d(kernel_size=(3, 3, 3), stride=(2, 2, 2), padding=(1, 1, 1))
 
         # Mixed_4b to Mixed_4f
-        self.mixed_4b = self._inception_module(480, [192, 96, 208, 16, 48, 64])
-        self.mixed_4c = self._inception_module(512, [160, 112, 224, 24, 64, 64])
-        self.mixed_4d = self._inception_module(512, [128, 128, 256, 24, 64, 64])
-        self.mixed_4e = self._inception_module(512, [112, 144, 288, 32, 64, 64])
-        self.mixed_4f = self._inception_module(528, [256, 160, 320, 32, 128, 128])
+        self.mixed_4b = InceptionModule3D(480, [192, 96, 208, 16, 48, 64])
+        self.mixed_4c = InceptionModule3D(512, [160, 112, 224, 24, 64, 64])
+        self.mixed_4d = InceptionModule3D(512, [128, 128, 256, 24, 64, 64])
+        self.mixed_4e = InceptionModule3D(512, [112, 144, 288, 32, 64, 64])
+        self.mixed_4f = InceptionModule3D(528, [256, 160, 320, 32, 128, 128])
         self.maxpool4 = nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 0, 0))
 
         # Mixed_5b, Mixed_5c
-        self.mixed_5b = self._inception_module(832, [256, 160, 320, 32, 128, 128])
-        self.mixed_5c = self._inception_module(832, [384, 192, 384, 48, 128, 128])
+        self.mixed_5b = InceptionModule3D(832, [256, 160, 320, 32, 128, 128])
+        self.mixed_5c = InceptionModule3D(832, [384, 192, 384, 48, 128, 128])
 
         # Classification head
         self.avgpool = nn.AvgPool3d(kernel_size=(8, 7, 7), stride=(1, 1, 1))
         self.dropout = nn.Dropout(0.5)
         self.fc = nn.Linear(832, num_classes)
-
-    def _inception_module(self, in_channels, out_channels):
-        """Build an inception module."""
-        return nn.ModuleDict({
-            'b0': nn.Conv3d(in_channels, out_channels[0], kernel_size=1),
-            'b1a': nn.Conv3d(in_channels, out_channels[1], kernel_size=1),
-            'b1b': nn.Conv3d(out_channels[1], out_channels[2], kernel_size=(3, 3, 3), padding=(1, 1, 1)),
-            'b2a': nn.Conv3d(in_channels, out_channels[3], kernel_size=1),
-            'b2b': nn.Conv3d(out_channels[3], out_channels[4], kernel_size=(3, 3, 3), padding=(1, 1, 1)),
-            'b3': nn.MaxPool3d(kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1)),
-            'b3b': nn.Conv3d(in_channels, out_channels[5], kernel_size=1)
-        })
 
     def forward(self, x):
         """Forward pass through I3D network."""
@@ -224,7 +280,7 @@ class DynamicFeatureExtractor(nn.Module):
 
     def load_checkpoint(self, checkpoint_path):
         """Load I3D checkpoint."""
-        state_dict = torch.load(checkpoint_path, map_location='cpu')
+        state_dict = torch.load(checkpointing_path, map_location='cpu')
         self.i3d.load_state_dict(state_dict, strict=False)
         print(f"Loaded I3D checkpoint from {checkpoint_path}")
 
