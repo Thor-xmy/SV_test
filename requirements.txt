@@ -1,0 +1,22 @@
+# Core dependencies
+torch>=1.9.0
+torchvision>=0.10.0
+numpy>=1.19.0
+opencv-python>=4.5.0
+
+# Training utilities
+pyyaml>=5.4.0
+tqdm>=4.62.0
+tensorboard>=2.8.0
+
+# Metrics
+scipy>=1.7.0
+
+# Optional: SAM3 for online mask generation
+# huggingface-hub>=0.8.0
+# sam3  # If using SAM3 as a package
+
+# Optional: Additional image/video processing
+# pillow>=8.3.0
+# imageio>=2.19.0
+# scikit-image>=0.19.0
