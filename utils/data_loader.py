@@ -283,17 +283,32 @@ class SurgicalVideoDataset(Dataset):
                 align_corners=False
             ).squeeze(1)
 
-            # Match clip length
-            if masks.size(0) > frames.size(1):
-                masks = masks[:frames.size(1)]
-            elif masks.size(0) < frames.size(1):
-                # Pad with zeros
-                pad_size = frames.size(1) - masks.size(0)
-                masks = torch.nn.functional.pad(
-                    masks.unsqueeze(0).unsqueeze(0),
+            # FIX: Slice masks according to current clip's start/end frames
+            start_idx = clip['start_frame']
+            end_idx = clip['end_frame']
+
+            # Ensure indices are valid
+            max_len = masks.size(0)
+            valid_start = min(start_idx, max_len - 1)
+            valid_end = min(end_idx, max_len)
+
+            # Extract corresponding mask segment
+            clip_masks = masks[valid_start:valid_end]
+
+            # Pad if extracted mask is shorter than clip length
+            if clip_masks.size(0) < frames.size(1):
+                pad_size = frames.size(1) - clip_masks.size(0)
+                clip_masks = torch.nn.functional.pad(
+                    clip_masks.unsqueeze(0).unsqueeze(0),
                     (0, 0, 0, 0, 0, pad_size),
-                    mode='replicate'
+                    mode='constant',
+                    value=0
                 ).squeeze(0).squeeze(0)
+            # Truncate if longer
+            elif clip_masks.size(0) > frames.size(1):
+                clip_masks = clip_masks[:frames.size(1)]
+
+            masks = clip_masks
 
         # Return sample
         sample = {

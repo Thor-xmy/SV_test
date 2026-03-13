@@ -148,6 +148,7 @@ class MaskGuidedAttention(nn.Module):
         return A_agg
 
     def forward(self, dynamic_features, masks, return_attention_map=False):
+    def forward(self, dynamic_features, masks, return_attention_map=False):
         """
         Apply mask-guided attention to dynamic features.
 
@@ -164,61 +165,48 @@ class MaskGuidedAttention(nn.Module):
         B, C, T, H, W = dynamic_features.shape
         device = dynamic_features.device
 
-        # 1. Temporal smoothing of masks (as in paper1231)
+        # 1. Temporal smoothing of masks (alleviate SAM single-frame segmentation jitter)
         if self.enable_temporal_smoothing:
             masks = self._temporal_smoothing(masks)
 
-        # 2. Generate attention from mask features
-        target_size = (H, W)
-        mask_attention = self._generate_attention_from_masks(masks, target_size)  # (B, T, H, W)
+        # 2. Dimension alignment and projection
+        # Downsample high-resolution masks to I3D feature spatial resolution (T, H, W)
+        masks_3d = masks.unsqueeze(1)  # (B, 1, T_mask, H_mask, W_mask)
+        masks_3d = F.interpolate(masks_3d, size=(T, H, W), mode='trilinear', align_corners=False)
+        
+        # Get mask_attention through convolution projection
+        mask_attention = self.mask_proj(masks_3d)  # (B, 1, T, H, W)
+        mask_attention = mask_attention.squeeze(1)  # (B, T, H, W)
 
-        # 3. Project mask to match feature dimensions
-        # Process each frame independently with 2D conv
-        BT = B * T
-        masks_2d = masks.reshape(BT, 1, masks.size(2), masks.size(3))  # (B*T, 1, H_mask, W_mask)
-        masks_2d = F.interpolate(masks_2d, size=(H, W), mode='bilinear', align_corners=False)  # (B*T, 1, H, W)
-        projected_mask = self.mask_proj(masks_2d)  # (B*T, 1, H, W)
-        projected_mask = projected_mask.reshape(B, T, H, W)  # (B, T, H, W)
-
-        # 4. Generate learned attention from features
+        # 3. Generate learned attention from features
         feature_attention = self.attention_conv(dynamic_features)  # (B, 1, T, H, W)
         feature_attention = feature_attention.squeeze(1)  # (B, T, H, W)
 
-        # 5. Combine mask attention and learned attention
-        # Learnable fusion weight
+        # 4. Combine mask attention and learned attention
         combined_attention = (
             self.alpha * mask_attention + (1 - self.alpha) * feature_attention
-        )  # (B, T, H, W)
+        ).unsqueeze(1)  # (B, 1, T, H, W)
 
-        # Add channel dimension back for multiplication
-        combined_attention = combined_attention.unsqueeze(1)  # (B, 1, T, H, W)
+        # 5. Apply attention to features (element-wise multiplication)
+        # F_dy = F_clip * (A + 1) where 1 is identity
+        masked_features = dynamic_features * (combined_attention + 1.0)  # (B, C, T, H, W)
 
-        # 6. Apply attention to features (element-wise multiplication)
-        # F_dy = F_clip * (A + I) where I is identity
-        masked_features = dynamic_featureskt * (combined_attention + 1.0)  # (B, C, T, H, W)
-
-        # 7. Global pooling to get compact representation
+        # 6. Global pooling to get compact representation
         pooled_features = F.adaptive_avg_pool3d(masked_features, (1, 1, 1))  # (B, C, 1, 1, 1)
         pooled_features = pooled_features.flatten(1)  # (B, C)
 
-        # 8. Optional mask supervision loss
+        # 7. Mask supervision loss (Eq.6: constrain network-generated attention to fit true Mask)
         mask_loss = None
         if self.use_mask_loss and self.training:
-            # L2 loss between attention and ground-truth mask
-            # Loss_mask = (1/(T*W*H)) * sum(||A - M_gt||^2)
-            target_mask = masks.reshape(BT, 1, masks.size(2), masks.size(3))  # (B*T, 1, H_mask, W_mask)
-            target_mask = F.interpolate(target_mask, size=(H, W), mode='bilinear', align_corners=False)  # (B*T, 1, H, W)
-            target_mask = target_mask.reshape(B, T, H, W)  # (B, T, H, W)
-
+            target_mask = masks_3d.squeeze(1)  # (B, T, H, W)
             pred_attention = combined_attention.squeeze(1)  # (B, T, H, W)
-
-            loss = F.mse_loss(pred_attention, target_mask)
-            mask_loss = loss
+            mask_loss = F.mse_loss(pred_attention, target_mask)
 
         if return_attention_map:
             return pooled_features, combined_attention.squeeze(1), mask_loss
         else:
             return pooled_features, None, mask_loss
+
 
 
 class AttentionVisualization(nn.Module):

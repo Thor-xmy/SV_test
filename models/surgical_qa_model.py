@@ -189,17 +189,10 @@ class SurgicalQAModel(nn.Module):
         # ResNet-34 on keyframes -> captures tissue state and surgical field clarity
         static_features = self.static_extractor(video)  # (B, static_dim)
 
-        # 2. Extract dynamic features C
+        # 2. Extract dynamic features C (FIX: compute once, keep gradients)
         # I3D on video -> captures spatiotemporal dynamics
-        dynamic_features = self.dynamic_extractor(video)  # (B, dynamic_dim)
-
-        # Note: We need spatial dynamic features for mask application
-        # So we extract features before pooling
-        with torch.no_grad():
-            # Get unpoolled dynamic features for mask application
-            # This requires accessing the feature_extractor directly
-            raw_dynamic = self.dynamic_extractor.feature_extractor(video)
-            # (B, 832, T', H', W')
+        # FIX: Remove redundant computation and no_grad() wrapper
+        raw_dynamic = self.dynamic_extractor.feature_extractor(video)  # (B, 832, T', H', W')
 
         # 3-4. Apply mask-guided attention: B作用于C得到D
         # Generate attention from masks and apply to dynamic features

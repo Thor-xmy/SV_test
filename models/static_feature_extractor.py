@@ -47,11 +47,18 @@ class MultiScaleDownsample(nn.Module):
         Args:
             x: (B, C, H, W)
         Returns:
-            concat_feat: (B, 3*out_channels, H', W')
+            concat_feat: (B, 3*out_channels, 1, 1)
         """
         f2 = self.scale2(x)
         f4 = self.scale4(x)
         f8 = self.scale8(x)
+
+        # FIX: Pool all features to 1x1 before concatenation
+        # Different strides produce different spatial sizes (e.g., 4x4, 2x2, 1x1)
+        # which cannot be concatenated directly
+        f2 = F.adaptive_avg_pool2d(f2, (1, 1))
+        f4 = F.adaptive_avg_pool2d(f4, (1, 1))
+        f8 = F.adaptive_avg_pool2d(f8, (1, 1))
 
         # Concatenate features from all scales
         return torch.cat([f2, f4, f8], dim=1)
