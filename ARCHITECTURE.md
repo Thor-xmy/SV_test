@@ -22,32 +22,38 @@ Query Video V_q                    Reference Video V_r
 ```
 
 ### This Model (Single-Video Direct Regression)
-```
-Input Video X
-    |
-    ├─→ ResNet-34 ──────────────────┐
-    │    (Static Feature Extractor)    │
-    │                             Static Features A
-    │                                    │
-    ├─→ SAM3 Masks (Offline) ──────────┤
-    │    (Read from disk)               │
-    │                             Instrument Masks B ─→ Feature Fusion (Concatenation)
-    │                                    │     │
-    │                                    │     ↓
-    ├─→ I3D ───────────────────────────┐    Fused Features
-    │    (Dynamic Feature Extractor)      │     │
-    │                             Dynamic C │     │
-    │                                    │     │
-    └─────────────────────────────────┐     │     │
-              Mask-Guided Attention │     │     │
-                      B acts on C → D │     │
-                                       │     │
-                                       │     │
-                                       └─────┘
-                                            ↓
-                                      Final Score y
-```
 
+Input Video X (B, C, T, H, W)
+     │
+     ├─────────────────────────────────────────────────┐
+     │                                                 │
+     ↓                                                 ↓
+[ResNet-34]                                          [I3D]
+Static Extractor                              Dynamic Extractor
+     │                                                 │
+     ↓                                                 ↓
+Static Features A (B, 512)                    Dynamic Features C (B, 832, T, H, W)
+     │                                                 │
+     │       [Offline SAM3 Masks B] ───────────────────┤
+     │                                                 ↓
+     │                                     [Mask-Guided Attention]
+     │                                     D = C ⊙ (Attention + 1)
+     │                                                 │
+     │                                                 ↓
+     │                               Masked Dynamic Features D (B, 832)
+     │                                                 │
+     └───────────────────────┬─────────────────────────┘
+                             │
+                             ↓
+                       [Concatenate]
+                    Fused Features (B, 1344)
+                             │
+                             ↓
+                     [Fusion Regressor]
+                  (MLP: 1024->512->256->128->64->1)
+                             │
+                             ↓
+                       Final Score y
 ## 2. Module Details
 
 ### Module 1: Static Feature Extractor (ResNet-34)
