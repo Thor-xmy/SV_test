@@ -355,7 +355,7 @@ class SurgicalQADataLoader:
         if dataset_kwargs is None:
             dataset_kwargs = {}
 
-        # Create full dataset
+        # Create full dataset for indexing
         full_dataset = SurgicalVideoDataset(data_root, **dataset_kwargs)
 
         # Split into train/val/test
@@ -372,10 +372,29 @@ class SurgicalQADataLoader:
         val_indices = indices[train_size:train_size + val_size]
         test_indices = indices[train_size + val_size:]
 
-        # Create datasets with specific indices
-        self.train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
-        self.val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
-        self.test_dataset = torch.utils.data.Subset(full_dataset, test_indices)
+        # FIX: Create separate dataset instances with proper is_train flags
+        # This ensures val/test use deterministic clip selection (clip_idx=0)
+        # while train uses random clip sampling
+
+        # Make copy of kwargs and set is_train
+        train_kwargs = dataset_kwargs.copy()
+        train_kwargs['is_train'] = True
+
+        val_kwargs = dataset_kwargs.copy()
+        val_kwargs['is_train'] = False
+
+        test_kwargs = dataset_kwargs.copy()
+        test_kwargs['is_train'] = False
+
+        # Create separate dataset instances
+        self.train_dataset_raw = SurgicalVideoDataset(data_root, **train_kwargs)
+        self.val_dataset_raw = SurgicalVideoDataset(data_root, **val_kwargs)
+        self.test_dataset_raw = SurgicalVideoDataset(data_root, **test_kwargs)
+
+        # Wrap with Subset for specific indices
+        self.train_dataset = torch.utils.data.Subset(self.train_dataset_raw, train_indices)
+        self.val_dataset = torch.utils.data.Subset(self.val_dataset_raw, val_indices)
+        self.test_dataset = torch.utils.data.Subset(self.test_dataset_raw, test_indices)
 
         print(f"\nDataset splits:")
         print(f"  Train: {len(train_indices)} samples")

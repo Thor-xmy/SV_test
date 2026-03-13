@@ -98,8 +98,11 @@ class MaskGuidedAttention(nn.Module):
         odd_frames = masks[:, 1::2, :, :]  # M^1, M^3, ...
 
         # Pad if odd number of frames
+        # FIX: F.pad with mode='replicate' doesn't work for 4D tensors (B, T, H, W)
+        # Use torch.cat to duplicate the last frame instead
         if even_frames.size(1) > odd_frames.size(1):
-            odd_frames = F.pad(odd_frames, (0, 0, 0, 0, 0, 1), mode='replicate')
+            last_frame = odd_frames[:, -1:, :, :]  # (B, 1, H, W)
+            odd_frames = torch.cat([odd_frames, last_frame], dim=1)  # (B, T_odd+1, H, W)
 
         # Sum adjacent frames
         smoothed = even_frames + odd_frames
