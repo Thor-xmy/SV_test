@@ -25,27 +25,27 @@ Query Video V_q                    Reference Video V_r
 ```
 Input Video X
     |
-    ├─> ResNet-34 ──────────────────┐
-    │     (Static Feature Extractor)   │
-    │                              Static Features A
-    │                                     │
-    ├─> SAM3 Masks (Offline) ──────────┤
-    │     (Read from disk)                │
-    │                              Instrument Masks B  ─> Feature Fusion (Concatenation)
-    │                                     │      │
-    │                                     │      ↓
-    ├─> I3D ───────────────────────────┐    Fused Features
-    │     (Dynamic Feature Extractor)       │      │
-    │                              Dynamic C  │      │
-    │                                     │      │
-    └────────────────────────────────┐      │      │
-             Mask-Guided Attention │      │      │
-                     B作用于C → D   │      │
-                                        │      │
-                                        │      │
-                                        └──────┘
-                                             ↓
-                                    Final Score y
+    ├─→ ResNet-34 ──────────────────┐
+    │    (Static Feature Extractor)    │
+    │                             Static Features A
+    │                                    │
+    ├─→ SAM3 Masks (Offline) ──────────┤
+    │    (Read from disk)               │
+    │                             Instrument Masks B ─→ Feature Fusion (Concatenation)
+    │                                    │     │
+    │                                    │     ↓
+    ├─→ I3D ───────────────────────────┐    Fused Features
+    │    (Dynamic Feature Extractor)      │     │
+    │                             Dynamic C │     │
+    │                                    │     │
+    └─────────────────────────────────┐     │     │
+              Mask-Guided Attention │     │     │
+                      B acts on C → D │     │
+                                       │     │
+                                       │     │
+                                       └─────┘
+                                            ↓
+                                      Final Score y
 ```
 
 ## 2. Module Details
