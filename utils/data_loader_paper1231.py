@@ -1,10 +1,16 @@
 """
-Data Loader Module for Surgical QA Dataset
+Data Loader Module for Surgical QA Dataset (paper1231 style)
 
 Handles loading video clips and corresponding:
 - Ground truth skill scores
 - Pre-computed instrument masks
 - Video metadata
+
+paper1231 KEY DIFFERENCE:
+- Each clip is treated as an independent training sample
+- All clips are pre-loaded and cached
+- __len__() returns total number of clips (not number of videos)
+- __getitem__() returns specific clip (not random selection)
 """
 
 import os
@@ -15,12 +21,11 @@ from torch.utils.data import Dataset, DataLoader
 import json
 import glob
 from typing import List, Dict, Tuple, Optional
-import random
 
 
 class SurgicalVideoDataset(Dataset):
     """
-    Dataset for surgical video quality assessment.
+    Dataset for surgical video quality assessment (paper1231 style).
 
     Structure:
     data_root/
@@ -39,6 +44,13 @@ class SurgicalVideoDataset(Dataset):
                 "video_002": {"score": 7.2, "duration": 115, ...},
                 ...
             }
+
+    paper1231 clip strategy:
+    - Each video is divided into N overlapping clips
+    - Clip length: 16 frames
+    - Stride: 10 frames
+    - Overlap: 6 frames between consecutive clips
+    - Each clip is an independent training sample
     """
     def __init__(self,
                  data_root,
@@ -53,15 +65,15 @@ class SurgicalVideoDataset(Dataset):
                  transform=None,
                  use_mask=True,
                  mask_format='png',
-                 cache_clips=True):  # NEW: Add clip caching option
+                 cache_clips=True):
         """
         Args:
             data_root: Root directory of dataset
             video_dir: Subdirectory containing videos
             mask_dir: Subdirectory containing masks
             annotation_file: JSON file with video scores
-            clip_length: Number of frames per clip
-            clip_stride: Stride for clip extraction
+            clip_length: Number of frames per clip (paper1231: 16)
+            clip_stride: Stride for clip extraction (paper1231: 10)
             spatial_size: Resize video to (H, W)
             spatial_crop: Crop strategy ('center', 'random', 'none')
             normalize: Normalize pixel values to [-1, 1]
@@ -83,7 +95,7 @@ class SurgicalVideoDataset(Dataset):
         self.transform = transform
         self.use_mask = use_mask
         self.mask_format = mask_format
-        self.cache_clips = cache_clips  # NEW: Store caching preference
+        self.cache_clips = cache_clips
         self.is_train = True
 
         # Load annotations
@@ -92,19 +104,21 @@ class SurgicalVideoDataset(Dataset):
         # Get video list
         self.video_list = self._get_video_list()
 
-        # NEW: Pre-load clips according to paper1231 strategy
+        # paper1231: Pre-load all clips
         if self.cache_clips:
-            print("Pre-loading clips according to paper1231 strategy...")
+            print("\nPre-loading clips according to paper1231 strategy...")
+            print(f"  Clip length: {clip_length}, Stride: {clip_stride}")
+            print(f"  Overlap between clips: {clip_length - clip_stride} frames")
             self.clips = self._preload_all_clips()
             print(f"  Total clips loaded: {len(self.clips)}")
         else:
             self.clips = None
 
-        print(f"SurgicalVideoDataset initialized:")
+        print("\nSurgicalVideoDataset initialized:")
         print(f"  Data root: {data_root}")
         print(f"  Number of videos: {len(self.video_list)}")
         if self.cache_clips:
-            print(f"  Number of clips: {len(self.clips)}")
+            print(f"  Number of clips: {len(self.clips)} (paper1231 style)")
         print(f"  Clip length: {clip_length}, stride: {clip_stride}")
         print(f"  Spatial size: {spatial_size}")
         print(f"  Use masks: {use_mask}")
@@ -136,40 +150,13 @@ class SurgicalVideoDataset(Dataset):
         print(f"Found {len(valid_videos)} valid videos with annotations")
         return valid_videos
 
-    def _preload_all_clips(self):
-        """
-        Pre-load all clips from all videos following paper1231 strategy.
-
-        This ensures each clip is treated as an independent training sample,
-        maximizing the benefit of overlapping clips.
-
-        Returns:
-            clips: List of all clips with metadata
-        """
-        all_clips = []
-
-        for video_idx, video_path in enumerate(self.video_list):
-            video_id = os.path.splitext(os.path.basename(video_path))[0]
-
-            # Extract clips from this video
-            video_clips = self._extract_clips_from_video(video_path)
-
-            # Add metadata to each clip
-            for clip in video_clips:
-                clip['video_id'] = video_id
-                clip['global_clip_idx'] = len(all_clips)
-                clip['score'] = self.annotations[video_id]['score']
-                all_clips.append(clip)
-
-            print(f"  Video {video_idx + 1}/{len(self.video_list)}: {video_id} -> {len(video_clips)} clips")
-
-        return all_clips
-
     def _extract_clips_from_video(self, video_path):
         """
-        Extract clips from a video file.
+        Extract clips from a video file using paper1231 strategy.
 
-        Returns list of (frames, start_frame) tuples.
+        Uses sliding window with stride=10, clip_length=16.
+
+        Returns list of clip dicts.
         """
         cap = cv2.VideoCapture(video_path)
 
@@ -214,6 +201,35 @@ class SurgicalVideoDataset(Dataset):
 
         cap.release()
         return clips
+
+    def _preload_all_clips(self):
+        """
+        Pre-load all clips from all videos following paper1231 strategy.
+
+        This ensures each clip is treated as an independent training sample,
+        maximizing the benefit of overlapping clips.
+
+        Returns:
+            clips: List of all clips with metadata
+        """
+        all_clips = []
+
+        for video_idx, video_path in enumerate(self.video_list):
+            video_id = os.path.splitext(os.path.basename(video_path))[0]
+
+            # Extract clips from this video
+            video_clips = self._extract_clips_from_video(video_path)
+
+            # Add metadata to each clip
+            for clip in video_clips:
+                clip['video_id'] = video_id
+                clip['global_clip_idx'] = len(all_clips)
+                clip['score'] = self.annotations[video_id]['score']
+                all_clips.append(clip)
+
+            print(f"  Video {video_idx + 1}/{len(self.video_list)}: {video_id} -> {len(video_clips)} clips")
+
+        return all_clips
 
     def _load_masks(self, video_id):
         """Load masks for a video."""
@@ -310,9 +326,8 @@ class SurgicalVideoDataset(Dataset):
         paper1231 style: Returns a specific clip (not random selection).
         Each clip is treated as an independent training sample.
         """
-
         if self.cache_clips and self.clips is not None:
-            # NEW: paper1231 style - return specific clip from pre-loaded cache
+            # paper1231 style: Return specific clip from pre-loaded cache
             clip = self.clips[idx]
             video_id = clip['video_id']
             score = clip['score']
@@ -375,7 +390,7 @@ class SurgicalVideoDataset(Dataset):
 
             return sample
         else:
-            # OLD: Legacy mode - random clip selection (not paper1231 style)
+            # Legacy mode: random clip selection (not paper1231 style)
             video_path = self.video_list[idx]
             video_id = os.path.splitext(os.path.basename(video_path))[0]
 
@@ -407,7 +422,7 @@ class SurgicalVideoDataset(Dataset):
                     align_corners=False
                 ).squeeze(1)
 
-                # FIX: Slice masks according to current clip's start/end frames
+                # Slice masks according to current clip's start/end frames
                 start_idx = clip['start_frame']
                 end_idx = clip['end_frame']
 
@@ -478,14 +493,16 @@ class SurgicalQADataLoader:
         if dataset_kwargs is None:
             dataset_kwargs = {}
 
-        # Create full dataset for indexing
+        # Create full dataset
         full_dataset = SurgicalVideoDataset(data_root, **dataset_kwargs)
 
-        # Split into train/val/test
+        # Get dataset size (now total clips if caching is enabled)
         total_size = len(full_dataset)
+
+        # Split into train/val/test
         train_size = int(total_size * train_split)
         val_size = int(total_size * val_split)
-        test_size = total_size - train_size - val_size
+        test_size = total_size - train_size - val_split
 
         # Create indices for splits
         indices = list(range(total_size))
@@ -495,12 +512,8 @@ class SurgicalQADataLoader:
         val_indices = indices[train_size:train_size + val_size]
         test_indices = indices[train_size + val_size:]
 
-        # FIX: Create separate dataset instances with proper is_train flags
-        # This ensures val/test use deterministic clip selection (clip_idx=0)
-        # while train uses random clip sampling
-        # NOTE: is_train is not a __init__ parameter, set it after instantiation
-
-        # Create separate dataset instances
+        # Create dataset instances for each split
+        # Each split gets its own dataset instance with correct is_train flag
         self.train_dataset_raw = SurgicalVideoDataset(data_root, **dataset_kwargs)
         self.train_dataset_raw.is_train = True
 
@@ -515,10 +528,11 @@ class SurgicalQADataLoader:
         self.val_dataset = torch.utils.data.Subset(self.val_dataset_raw, val_indices)
         self.test_dataset = torch.utils.data.Subset(self.test_dataset_raw, test_indices)
 
-        print(f"\nDataset splits:")
+        print(f"\nDataset splits (paper1231 style):")
         print(f"  Train: {len(train_indices)} samples")
         print(f"  Val: {len(val_indices)} samples")
         print(f"  Test: {len(test_indices)} samples")
+        print(f"  Total: {total_size} samples")
 
         # Create dataloaders
         self.train_loader = DataLoader(
@@ -617,7 +631,7 @@ if __name__ == '__main__':
             cv2.imwrite(os.path.join(mask_dir, f'frame_{frame:04d}_mask.png'), mask)
 
     # Test dataset
-    dataset = SurgicalVideoDataset(tmp_dir, clip_length=8, spatial_size=224)
+    dataset = SurgicalVideoDataset(tmp_dir, clip_length=8, spatial_size=224, cache_clips=True)
     print(f"\nDataset size: {len(dataset)}")
 
     if len(dataset) > 0:

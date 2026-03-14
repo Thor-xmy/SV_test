@@ -163,7 +163,7 @@ print(f'  Output D: (B, 832)  ← Masked dynamic features')
 print()
 
 from models.mask_guided_attention import MaskGuidedAttention
-mask_attention = MaskGuidedAttention(feature_dim=832, use_mask_loss=False)
+mask_attention = MaskGuidedAttention(enable_temporal_smoothing=True)
 masked_dynamic, attention_map, mask_loss = mask_attention(dynamic_feat_map, masks, return_attention_map=True)
 print(f'✓ Verified: Masked dynamic features D shape = {tuple(masked_dynamic.shape)}')
 print(f'✓ Verified: Attention map shape = {tuple(attention_map.shape)}')

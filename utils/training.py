@@ -189,9 +189,9 @@ def train_epoch(model, dataloader, optimizer, criterion, device,
             # Logging
             if verbose and (step_idx + 1) % log_frequency == 0:
                 pbar.set_postfix({
-                    'loss': f"{loss_meter.avg:.4f}",
-                    's_loss': f"{score_loss_meter.avg:.4f}",
-                    'm_loss': f"{mask_loss_meter.avg:.4f}",
+                    'loss': f"{loss_meter.avg::.4f}",
+                    's_loss': f"{score_loss_meter.avg::.4f}",
+                    'm_loss': f"{mask_loss_meter.avg::.4f}",
                     'time': f"{iter_time:.3f}s"
                 })
 
@@ -223,9 +223,9 @@ def train_epoch(model, dataloader, optimizer, criterion, device,
         print("-" * 60)
         print(f"Epoch {epoch} - Training Summary")
         print("-" * 60)
-        print(f"  Loss: {loss_meter.get_average():.4f}")
-        print(f"  Score Loss: {score_loss_meter.get_average():.4f}")
-        print(f"  Mask Loss: {mask_loss_meter.get_average():.4f}")
+        print(f"  Loss: {loss_meter.get_average()::.4f}")
+        print(f"  Score Loss: {score_loss_meter.get_average()::.4f}")
+        print(f"  Mask Loss: {mask_loss_meter.get_average()::.4f}")
         print(f"  Time: {epoch_time:.2f}s")
         print("-" * 60)
 
@@ -304,8 +304,8 @@ def validate(model, dataloader, criterion, device,
                 # Logging
                 if verbose:
                     pbar.set_postfix({
-                        'loss': f"{loss_meter.avg:.4f}",
-                        's_loss': f"{score_loss_meter.avg:.4f}"
+                        'loss': f"{loss_meter.avg::.4f}",
+                        's_loss': f"{score_loss_meter.avg::.4f}"
                     })
 
     # Combine predictions
@@ -328,9 +328,9 @@ def validate(model, dataloader, criterion, device,
         print("-" * 60)
         print(f"Validation Summary")
         print("-" * 60)
-        print(f"  Loss: {loss_meter.get_average():.4f}")
-        print(f"  Score Loss: {score_loss_meter.get_average():.4f}")
-        print(f"  Mask Loss: {mask_loss_meter.get_average():.4f}")
+        print(f"  Loss: {loss_meter.get_average()::.4f}")
+        print(f"  Score Loss: {score_loss_meter.get_average()::.4f}")
+        print(f"  Mask Loss: {mask_loss_meter.get_average()::.4f}")
         print(f"  Time: {val_time:.2f}s")
         print("-" * 60)
 
@@ -353,7 +353,7 @@ class TrainingLogger:
         # Initialize log file
         with open(self.log_path, 'w') as f:
             f.write("Training Log\n")
-            f.write("="*60 + "\n")
+            f.write("=" * 60 + "\n")
 
         self.metrics_history = []
 

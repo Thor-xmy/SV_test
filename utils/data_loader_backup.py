@@ -304,13 +304,12 @@ class SurgicalVideoDataset(Dataset):
             return len(self.video_list)
 
     def __getitem__(self, idx):
-        """
+        ""
         Get a clip from dataset.
 
         paper1231 style: Returns a specific clip (not random selection).
         Each clip is treated as an independent training sample.
-        """
-
+        ""
         if self.cache_clips and self.clips is not None:
             # NEW: paper1231 style - return specific clip from pre-loaded cache
             clip = self.clips[idx]
@@ -329,7 +328,7 @@ class SurgicalVideoDataset(Dataset):
                     masks.unsqueeze(1),
                     size=self.spatial_size,
                     mode='bilinear',
-                    align_corners=False
+                    aligning_corners=False
                 ).squeeze(1)
 
                 # Slice masks according to current clip's start/end frames
@@ -449,7 +448,7 @@ class SurgicalVideoDataset(Dataset):
 
             return sample
 
-
+class SurgicalQADataLoader:
 class SurgicalQADataLoader:
     """
     Data loader wrapper for surgical QA dataset.

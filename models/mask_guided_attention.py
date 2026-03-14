@@ -2,14 +2,22 @@
 Mask-Guided Attention Module
 Based on paper1231: Mask-guided Attention Module (Section C.2)
 
-This module implements mask-guided attention to focus on instrument manipulation regions.
+This module applies offline SAM3 masks as spatial attention to focus on
+instrument manipulation regions.
+
+IMPORTANT: This implementation is designed for OFFLINE SAM3 masks.
+Unlike paper1231 where SAM2 provides features for learning attention A,
+here we directly use the pre-computed high-precision SAM3 masks as attention.
 
 Reference from paper1231:
-1. Generates mean and max spatial attention maps from mask features
-2. Aggregates attention maps using learnable weights
-3. Constrains attention with ground-truth masks via pixel-level loss
-4. Multiplies attention with features to enhance instrument regions
+- Formula: F_dy = F_clip * (A + I)
+- Where A is the attention map and I is identity
+
+Difference from paper1231:
+- Paper: SAM2 provides features → learn attention A → use mask as supervision
+- Here: SAM3 provides offline masks → use masks directly as attention A
 """
+
 
 import torch
 import torch.nn as nn
@@ -18,74 +26,50 @@ import torch.nn.functional as F
 
 class MaskGuidedAttention(nn.Module):
     """
-    Mask-Guided Attention Module from paper1231.
+    Mask-Guided Attention Module for offline SAM3 masks.
 
-    Formula from paper:
-    A_mean = (1/C) * sum(F_ms)  # Average pooling over channels
-    A_max = max(F_ms)              # Max pooling over channels
-    A = sigmoid(f_agg(A_mean, A_max))  # Aggregate and activate
-    F_dy = F_clip * (A + I)           # Apply to features
+    Implementation for high-precision offline SAM3 segmentation masks.
+    The masks are used directly as spatial attention without additional learning.
+
+    Formula: F_dy = F_clip * (A + I)
 
     Where:
-    - F_ms: Instrument mask features from segmentation network
-    - f_agg: Learnable aggregation function
-    - I: Identity matrix
     - F_clip: Short-term spatiotemporal features from I3D
+    - A: Attention map (from SAM3 masks after temporal smoothing)
+    - I: Identity (scalar 1.0)
+    - F_dy: Masked dynamic features
 
-    Note: This implementation uses a hybrid approach combining mask guidance
-    with learnable attention from features, which provides additional flexibility.
+    Key characteristics for offline masks:
+    1. No learnable attention: SAM3 masks are already high-precision
+    2. No mask projection: Convolution would destroy sharp edges
+    3. Temporal smoothing: Only for stabilizing across frames
+    4. Spatial interpolation: For aligning with I3D feature resolution
     """
     def __init__(self,
-                 feature_dim=256,
-                 use_mask_loss=True,
                  enable_temporal_smoothing=True):
         """
         Args:
-            feature_dim: Input feature channel dimension
-            use_mask_loss: Whether to use mask supervision loss
-            enable_temporal_smoothing: Smooth masks across adjacent frames
+            enable_temporal_smoothing: Apply temporal smoothing to reduce SAM3 jitter
         """
         super().__init__()
 
-        self.feature_dim = feature_dim
-        self.use_mask_loss = use_mask_loss
         self.enable_temporal_smoothing = enable_temporal_smoothing
 
-        # Additional attention generation from dynamic features
-        # This allows the network to learn attention beyond mask guidance
-        self.attention_conv = nn.Sequential(
-            nn.Conv3d(feature_dim, feature_dim // 4, kernel_size=1),
-            nn.ReLU(inplace=True),
-            nn.Conv3d(feature_dim // 4, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
-
-        # Mask projection for matching feature dimensions
-        # Must use Conv3d to handle 5D mask tensor (B, 1, T, H, W)
-        self.mask_proj = nn.Sequential(
-            nn.Conv3d(1, 64, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv3d(64, 1, kernel_size=3, padding=1),
-            nn.Sigmoid()
-        )
-
-        # Fusion weight (learnable balance between mask and learned attention)
-        self.alpha = nn.Parameter(torch.tensor(0.5))
+        # NOTE: No learnable parameters for offline SAM3 masks!
+        # The masks are used directly as attention after spatial/temporal alignment.
 
     def _temporal_smoothing(self, masks, target_T=None):
         """
-        Apply temporal smoothing to masks as in paper1231.
+        Apply temporal smoothing to SAM3 masks as in paper1231.
 
         Paper formula: M_gt[w,h] = f_2D(sum(M^{2t-1,w,h} + M^{2t,w,h}))
 
-        Steps:
-        1. Sum adjacent frames: M^{2t-1} + M^{2t}
-        2. Apply 2D average pooling (f_2D) to resize mask spatially
-        3. This reduces jitter and local instability in single-frame masks
+        This reduces jitter and local instability in single-frame masks from SAM3.
 
         Args:
             masks: (B, T, H, W)
-            target_T: Target temporal dimension (if None, keep T/2)
+            target_T: Target temporal dimension for I3D alignment (if None, keep T/2)
+
         Returns:
             smoothed_masks: (B, T_out, H', W') - Temporal length may change
         """
@@ -100,18 +84,17 @@ class MaskGuidedAttention(nn.Module):
         even_frames = masks[:, 0:num_pairs*2:2, :, :]  # M^0, M^2, ...
         odd_frames = masks[:, 1:num_pairs*2:2, :, :]   # M^1, M^3, ...
 
-        # Sum adjacent pairs
+        # Sum adjacent pairs (paper1231 Eq.6)
         summed = even_frames + odd_frames  # (B, num_pairs, H, W)
 
         # Apply 2D average pooling (f_2D) as per paper
-        # This is spatial downsampling step to match I3D feature resolution
-        # Using a 2x2 average pool with stride 2 (common for feature map alignment)
+        # This is spatial downsampling step
         smoothed = F.avg_pool2d(summed, kernel_size=2, stride=2, padding=0)  # (B, num_pairs, H/2, W/2)
 
         # Normalize to [0, 1] range (since we summed two masks)
         smoothed = smoothed / 2.0
 
-        # If target temporal dimension is specified, interpolate to match
+        # If target temporal dimension is specified, interpolate to match I3D features
         if target_T is not None and smoothed.size(1) != target_T:
             # Permute to (B, H, W, T) for interpolation, then permute back
             smoothed = smoothed.permute(0, 2, 3, 1)  # (B, H, W, T/2)
@@ -127,63 +110,73 @@ class MaskGuidedAttention(nn.Module):
 
     def forward(self, dynamic_features, masks, return_attention_map=False):
         """
-        Apply mask-guided attention to dynamic features.
+        Apply SAM3 mask-guided attention to dynamic features.
 
         Args:
             dynamic_features: (B, C, T, H, W) - spatiotemporal features from I3D
-            masks: (B, T, H_mask, W_mask) - instrument masks [0,1]
+            masks: (B, T_mask, H_mask, W_mask) - offline SAM3 masks [0,1]
             return_attention_map: Return final attention map for visualization
 
         Returns:
-            masked_features: (B, C) - attention-applied features
-            attention_map: (B, T, H, W) - optional
-            mask_loss: Tensor - optional mask supervision loss
+            masked_features: (B, C) - attention-ap-mplied features
+            attention_map: (B, T, H, W) - optional, for visualization
+            mask_loss: None (no supervision loss needed for offline masks)
         """
         B, C, T, H, W = dynamic_features.shape
         device = dynamic_features.device
 
-        # 1. Temporal smoothing of masks (alleviate SAM single-frame segmentation jitter)
-        # Pass target temporal dimension T to ensure alignment with I3D features
+        # ========================================================================
+        # Step 1: Temporal smoothing (reduce SAM3 single-frame jitter)
+        # ========================================================================
         if self.enable_temporal_smoothing:
             masks = self._temporal_smoothing(masks, target_T=T)
+        # Shape after smoothing: (B, T, H', W') where H' and W' may be smaller
 
-        # 2. Dimension alignment and projection
-        # Downsample high-resolution masks to I3D feature spatial resolution (T, H, W)
-        masks_3d = masks.unsqueeze(1)  # (B, 1, T_mask, H_mask, W_mask)
-        masks_3d = F.interpolate(masks_3d, size=(T, H, W), mode='trilinear', align_corners=False)
+        # ========================================================================
+        # Step 2: Spatial alignment with I3D feature map
+        # ========================================================================
+        # Upsample/Downsample masks to exactly match I3D feature resolution (T, H, W)
+        # SAM3 masks: (B, T, H', W')
+        # I3D features:  (B, C, T, H, W)
 
-        # Get mask_attention through convolution projection
-        mask_attention = self.mask_proj(masks_3d)  # (B, 1, T, H, W)
-        mask_attention = mask_attention.squeeze(1)  # (B, T, H, W)
+        masks_5d = masks.unsqueeze(1)  # (B, 1, T, H', W')
+        masks_aligned = F.interpolate(
+            masks_5d,
+            size=(T, H, W),
+            mode='trilinear',
+            align_corners=False
+        )  # (B, 1, T, H, W)
 
-        # 3. Generate learned attention from features
-        feature_attention = self.attention_conv(dynamic_features)  # (B, 1, T, H, W)
-        feature_attention = feature_attention.squeeze(1)  # (B, T, H, W)
+        # The aligned mask is our attention map A
+        attention_map = masks_aligned.squeeze(1)  # (B, T, H, W)
 
-        # 4. Combine mask attention and learned attention
-        combined_attention = (
-            self.alpha * mask_attention + (1 - self.alpha) * feature_attention
-        ).unsqueeze(1)  # (B, 1, T, H, W)
+        # ========================================================================
+        # Step 3: Apply attention to features (paper1231 Eq.11)
+        # F_dy = F_clip ⊙ (A + I)
+        # ========================================================================
+        # A + I: add identity to preserve background information
+        # I is scalar 1.0, meaning all regions get at least 1x weight
+        # A ∈ [0,1], so A+I ∈ [1,2]
+        # Instrument regions (A≈1) get 2x weight
+        # Background regions (A≈0) get 1x weight
 
-        # 5. Apply attention to features (element-wise multiplication)
-        # F_dy = F_clip * (A + 1) where 1 is identity
-        masked_features = dynamic_features * (combined_attention + 1.0)  # (B, C, T, H, W)
+        masked_features = dynamic_features * (attention_map.unsqueeze(1) + 1.0)
+        # Shape: (B, C, T, H, W)
 
-        # 6. Global pooling to get compact representation
+        # ========================================================================
+        # Step 4: Global pooling to get compact representation
+        # ========================================================================
         pooled_features = F.adaptive_avg_pool3d(masked_features, (1, 1, 1))  # (B, C, 1, 1, 1)
         pooled_features = pooled_features.flatten(1)  # (B, C)
 
-        # 7. Mask supervision loss (Eq.6: constrain network-generated attention to fit true Mask)
-        mask_loss = None
-        if self.use_mask_loss and self.training:
-            target_mask = masks_3d.squeeze(1)  # (B, T, H, W)
-            pred_attention = combined_attention.squeeze(1)  # (B, T, H, W)
-            mask_loss = F.mse_loss(pred_attention, target_mask)
-
+        # ========================================================================
+        # Return results
+        # ========================================================================
+        # Note: No mask_loss because masks are ground-truth, not predictions
         if return_attention_map:
-            return pooled_features, combined_attention.squeeze(1), mask_loss
+            return pooled_features, attention_map, None
         else:
-            return pooled_features, None, mask_loss
+            return pooled_features, None, None
 
 
 class AttentionVisualization(nn.Module):
@@ -193,7 +186,7 @@ class AttentionVisualization(nn.Module):
     @staticmethod
     def visualize_attention(original_video, attention_map, save_path):
         """
-        Visualize attention map overlayed on original frames.
+        Visualize SAM3 mask attention overlayed on original frames.
 
         Args:
             original: (T, H, W, C) or (B, C, T, H, W)
@@ -245,19 +238,29 @@ class AttentionVisualization(nn.Module):
 
 
 if __name__ == '__main__':
-    # Test module
-    model = MaskGuidedAttention(feature_dim=832)
+    # Test mask-guided attention module
+    print("Testing MaskGuidedAttention module...")
 
-    # Create dummy inputs
-    dynamic_features = torch.randn(2, 832, 4, 7, 7)  # (B, C, T, H, W)
-    masks = torch.randint(0, 2, (2, 16, 224, 224)).float()  # (B, T, H, W)
+    # Create test inputs
+    B, C, T, H, W = 2, 832, 4, 7, 7
+    dynamic_features = torch.randn(B, C, T, H, W)
+    masks = torch.randint(0, 2, (B, 16, 224, 224)).float()
+
+    # Initialize module
+    mask_attention = MaskGuidedAttention(enable_temporal_smoothing=True)
 
     # Forward pass
-    features, attention, loss = model(dynamic_features, masks, return_attention_map=True)
+    masked_features, attention_map, mask_loss = mask_attention(
+        dynamic_features, masks, return_attention_map=True
+    )
 
-    print(f"Input features shape: {dynamic_features.shape}")
-    print(f"Input masks shape: {masks.shape}")
-    print(f"Output features shape: {features.shape}")
-    print(f"Attention map shape: {attention.shape}")
-    if loss is not None:
-        print(f"Mask loss: {loss.item()}")
+    print(f"\nInput shapes:")
+    print(f"  Dynamic features: {dynamic_features.shape}")
+    print(f"  Masks: {masks.shape}")
+
+    print(f"\nOutput shapes:")
+    print(f"  Masked features: {masked_features.shape}")
+    print(f"  Attention map: {attention_map.shape}")
+    print(f"  Mask loss: {mask_loss}")
+
+    print("\n✓ MaskGuidedAttention test passed!")

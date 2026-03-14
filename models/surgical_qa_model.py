@@ -143,10 +143,8 @@ class SurgicalQAModel(nn.Module):
         )
 
         # 3. Mask-Guided Attention Module
-        print("Initializing Mask-Guided Attention Module...")
+        print("Initializing Mask-Guided Attention Module (for offline SAM3 masks)...")
         self.masked_attention = MaskGuidedAttention(
-            feature_dim=self.dynamic_dim,
-            use_mask_loss=self.use_mask_loss,
             enable_temporal_smoothing=True
         )
 
