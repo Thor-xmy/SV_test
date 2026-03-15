@@ -55,9 +55,13 @@ def parse_args():
     parser.add_argument('--num_workers', type=int, default=4,
                        help='Number of data loading workers')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
-                       help='Learning rate')
-    parser.add_argument('--weight_decay', type=float, default=1e-4,
-                       help='Weight decay')
+                       help='Learning rate (default for backbone)')
+    parser.add_argument('--weight_decay', type=float, default=0.0,
+                       help='Weight decay (paper requires 0)')
+    parser.add_argument('--static_lr', type=float, default=1e-3,
+                       help='Learning rate for static module (paper: 1e-3)')
+    parser.add_argument('--backbone_lr', type=float, default=1e-4,
+                       help='Learning rate for backbone (paper: 1e-4)')
     parser.add_argument('--momentum', type=float, default=0.9,
                        help='Momentum for SGD')
     parser.add_argument('--optimizer', type=str, default='adam',
@@ -92,8 +96,8 @@ def parse_args():
     # Early stopping
     parser.add_argument('--early_stopping', action='store_true', default=True,
                        help='Enable early stopping')
-    parser.add_argument('--patience', type=int, default=15,
-                       help='Early stopping patience')
+    parser.add_argument('--patience', type=int, default=10,
+                       help='Early stopping patience (paper requires 10)')
     parser.add_argument('--min_delta', type=float, default=0.001,
                        help='Minimum delta for improvement')
 
@@ -146,7 +150,9 @@ def load_config(config_path, args):
         'epochs': args.epochs,
         'print_freq': args.print_freq,
         'save_freq': args.save_freq,
-        'log_freq': args.log_freq
+        'log_freq': args.log_freq,
+        'backbone_lr': args.backbone_lr,  # NEW
+        'static_lr': args.static_lr          # NEW
     }
 
     # Update config (command line overrides yaml)
@@ -177,35 +183,79 @@ def setup_device(gpus):
 
 
 def build_optimizer(model, config):
-    """Build optimizer."""
-    # Get trainable parameters
-    params = model.get_trainable_parameters()
+    """
+    Build optimizer with differential learning rates (paper setup).
 
+    Paper requirements:
+    - Backbone (I3D + ResNet): 1e-4
+    - Static module (fusion regressor): 1e-3
+    - Weight decay: 0
+    """
+    # 论文要求的不同学习率
+    backbone_lr = config.get('backbone_lr', 1e-4)      # 0.0001
+    static_lr = config.get('static_lr', 1e-3)          # 0.001
+    weight_decay = config.get('weight_decay', 0.0)    # 论文要求0
+
+    # 分组参数：backbone vs 其他模块
+    backbone_params = []
+    other_params = []
+
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            # Backbone参数：static_extractor和dynamic_extractor
+            if 'static_extractor' in name or 'dynamic_extractor' in name:
+                backbone_params.append(param)
+            else:
+                # 其他参数：fusion_regressor等
+                other_params.append(param)
+
+    # 构建参数组
+    param_groups = []
+
+    if backbone_params:
+        param_groups.append({
+            'params': backbone_params,
+            'lr': backbone_lr,
+            'name': 'backbone'
+        })
+
+    if other_params:
+        param_groups.append({
+            'params': other_params,
+            'lr': static_lr,
+            'name': 'static_module'
+        })
+
+    # 如果没有可训练参数
+    if len(param_groups) == 0:
+        raise ValueError("No trainable parameters found!")
+
+    # 构建优化器
     if config['optimizer'] == 'sgd':
         optimizer = optim.SGD(
-            params,
-            lr=config['learning_rate'],
+            param_groups,
             momentum=config.get('momentum', 0.9),
-            weight_decay=config['weight_decay']
+            weight_decay=weight_decay
         )
     elif config['optimizer'] == 'adam':
         optimizer = optim.Adam(
-            params,
-            lr=config['learning_rate'],
-            weight_decay=config['weight_decay']
+            param_groups,
+            weight_decay=weight_decay
         )
     elif config['optimizer'] == 'adamw':
         optimizer = optim.AdamW(
-            params,
-            lr=config['learning_rate'],
-            weight_decay=config['weight_decay']
+            param_groups,
+            weight_decay=weight_decay
         )
     else:
         raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
     print(f"Optimizer: {config['optimizer']}")
-    print(f"  Learning rate: {config['learning_rate']}")
-    print(f"  Weight decay: {config['weight_decay']}")
+    print(f"  Backbone LR: {backbone_lr}")
+    print(f"  Static Module LR: {static_lr}")
+    print(f"  Weight decay: {weight_decay}")
+    print(f"  Backbone params: {len(backbone_params)}")
+    print(f"  Other params: {len(other_params)}")
 
     return optimizer
 
@@ -513,9 +563,13 @@ def main():
         dataset_kwargs={
             'clip_length': 16,
             'clip_stride': 10,
-            'spatial_size': 224,
+            'spatial_size': 112,  # Paper requires 112x112
             'normalize': True,
-            'use_mask': True
+            'use_mask': True,
+            # Data augmentation (paper requirements)
+            'horizontal_flip_prob': 0.5,  # Random horizontal flipping
+            'enable_rotation': True,          # Random rotation
+            'is_train': True  # Enable augmentation during training
         }
     )
 

@@ -53,7 +53,11 @@ class SurgicalVideoDataset(Dataset):
                  transform=None,
                  use_mask=True,
                  mask_format='png',
-                 cache_clips=True):  # NEW: Add clip caching option
+                 cache_clips=True,
+                 # NEW: Data augmentation parameters (paper requirements)
+                 horizontal_flip_prob=0.5,
+                 enable_rotation=True,
+                 is_train=True):
         """
         Args:
             data_root: Root directory of dataset
@@ -69,6 +73,9 @@ class SurgicalVideoDataset(Dataset):
             use_mask: Whether to load masks
             mask_format: Format of mask files
             cache_clips: Whether to pre-load all clips (paper1231 style)
+            horizontal_flip_prob: Probability of horizontal flip (paper: random flipping)
+            enable_rotation: Enable random rotation (paper: random rotation)
+            is_train: Enable augmentations during training
         """
         self.data_root = data_root
         self.video_dir = os.path.join(data_root, video_dir)
@@ -83,8 +90,12 @@ class SurgicalVideoDataset(Dataset):
         self.transform = transform
         self.use_mask = use_mask
         self.mask_format = mask_format
-        self.cache_clips = cache_clips  # NEW: Store caching preference
-        self.is_train = True
+        self.cache_clips = cache_clips
+
+        # NEW: Data augmentation parameters
+        self.horizontal_flip_prob = horizontal_flip_prob
+        self.enable_rotation = enable_rotation
+        self.is_train = is_train
 
         # Load annotations
         self.annotations = self._load_annotations()
@@ -264,12 +275,14 @@ class SurgicalVideoDataset(Dataset):
 
         return None
 
-    def _preprocess_frames(self, frames):
+    def _preprocess_frames(self, frames, apply_horizontal_flip=False, rotation_k=0):
         """
-        Preprocess video frames.
+        Preprocess video frames with data augmentation (paper requirements).
 
         Args:
             frames: List of (H, W, C) numpy arrays
+            apply_horizontal_flip: Whether to flip horizontally
+            rotation_k: Rotation factor (0, 1, 2, 3 = 0, 90, 180, 270 degrees)
 
         Returns:
             frames_tensor: (C, T, H, W) torch tensor
@@ -277,7 +290,7 @@ class SurgicalVideoDataset(Dataset):
         T = len(frames)
         H, W, C = frames[0].shape
 
-        # Convert to tensor
+        # Convert to numpy array: (T, H, W, C) -> (T, C, H, W)
         frames_np = np.stack(frames, axis=0)  # (T, H, W, C)
         frames_np = frames_np.transpose(0, 3, 1, 2)  # (T, C, H, W)
 
@@ -291,6 +304,22 @@ class SurgicalVideoDataset(Dataset):
                 resized = resized.transpose(2, 0, 1)  # (C, H, W)
                 resized_frames.append(resized)
             frames_np = np.stack(resized_frames, axis=0)  # (T, C, H, W)
+
+        # ========================================================================
+        # Data Augmentation (Paper requirements) - Applied consistently to frames & masks
+        # ========================================================================
+        # Paper: "data augmentation techniques, including random horizontal
+        # flipping and rotation, were applied during training"
+
+        # Apply horizontal flip (if requested)
+        if apply_horizontal_flip:
+            frames_np = np.flip(frames_np, axis=3)  # (T, C, H, W) -> flip W
+
+        # Apply rotation (if requested, k = 0, 1, 2, 3 = 0, 90, 180, 270 degrees)
+        if rotation_k > 0:
+            for t in range(T):
+                for c in range(C):
+                    frames_np[t, c] = np.rot90(frames_np[t, c], k=rotation_k)
 
         # Crop
         if self.spatial_crop == 'center':
@@ -340,8 +369,24 @@ class SurgicalVideoDataset(Dataset):
             score = clip['score']
             global_clip_idx = clip['global_clip_idx']
 
-            # Preprocess frames
-            frames = self._preprocess_frames(clip['frames'])
+            # ========================================================================
+            # Decide augmentation transformations (consistent for frames & masks)
+            # ========================================================================
+            apply_horizontal_flip = False
+            rotation_k = 0
+
+            if self.is_train:
+                # Decide horizontal flip
+                if hasattr(self, 'horizontal_flip_prob') and self.horizontal_flip_prob > 0:
+                    apply_horizontal_flip = (random.random() < self.horizontal_flip_prob)
+
+                # Decide rotation
+                if hasattr(self, 'enable_rotation') and self.enable_rotation:
+                    if random.random() < 0.5:
+                        rotation_k = random.choice([1, 2, 3])  # 90, 180, or 270 degrees
+
+            # Preprocess frames with augmentation
+            frames = self._preprocess_frames(clip['frames'], apply_horizontal_flip, rotation_k)
 
             # Load masks
             masks = self._load_masks(video_id)
@@ -378,6 +423,13 @@ class SurgicalVideoDataset(Dataset):
                 # Truncate if longer
                 elif clip_masks.size(0) > frames.size(1):
                     clip_masks = clip_masks[:frames.size(1)]
+
+                # Apply same augmentation to masks (for consistency)
+                if apply_horizontal_flip:
+                    clip_masks = torch.flip(clip_masks, dims=[-1])  # Flip width
+
+                if rotation_k > 0:
+                    clip_masks = torch.rot90(clip_masks, k=rotation_k, dims=[1, 2])
 
                 masks = clip_masks
 
@@ -453,6 +505,13 @@ class SurgicalVideoDataset(Dataset):
                 # Truncate if longer
                 elif clip_masks.size(0) > frames.size(1):
                     clip_masks = clip_masks[:frames.size(1)]
+
+                # Apply same augmentation to masks (for consistency)
+                if apply_horizontal_flip:
+                    clip_masks = torch.flip(clip_masks, dims=[-1])  # Flip width
+
+                if rotation_k > 0:
+                    clip_masks = torch.rot90(clip_masks, k=rotation_k, dims=[1, 2])
 
                 masks = clip_masks
 
