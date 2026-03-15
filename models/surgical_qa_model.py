@@ -202,16 +202,15 @@ class SurgicalQAModel(nn.Module):
             return_attention_map=return_attention
         )  # (B, dynamic_dim), (B, T', H', W'), optional loss
 
-        # 5. Concatenate A and D -> fused features
-        # Static (tissue/field) + Dynamic (instrument) = comprehensive features
-        # Note: Use pooled dynamic features for fusion
-        fused_features = torch.cat([static_features, masked_dynamic_features], dim=1)
+        # 5. Static (tissue/field) + Dynamic (instrument) = comprehensive features
+        # Note: Fusion is handled inside fusion_regressor, no need to concatenate here
 
         # 6. Regress to score
         score = self.fusion_regressor(static_features, masked_dynamic_features)  # (B, 1)
 
         # Return based on flags
         if return_features:
+            fused_features = torch.cat([static_features, masked_dynamic_features], dim=1)
             features_dict = {
                 'static': static_features,
                 'dynamic_feat_map': dynamic_feat_map,

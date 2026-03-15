@@ -95,7 +95,12 @@ class StaticFeatureExtractor(nn.Module):
         self.sampling_strategy = sampling_strategy
 
         # Load ResNet-34 backbone
-        resnet = models.resnet34(pretrained=use_pretrained)
+        # Use 'weights' parameter for PyTorch 2.0+ compatibility
+        if use_pretrained:
+            from torchvision.models import ResNet34_Weights
+            resnet = models.resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
+        else:
+            resnet = models.resnet34(weights=None)
 
         # Remove the final classification layers (avgpool + fc)
         self.backbone = nn.Sequential(*list(resnet.children())[:-2])

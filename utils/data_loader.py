@@ -223,22 +223,44 @@ class SurgicalVideoDataset(Dataset):
         mask_path = os.path.join(self.mask_dir, video_id)
 
         if self.mask_format == 'npy':
-            masks = np.load(mask_path + '_masks.npy')
-            return torch.from_numpy(masks).float()
+            try:
+                masks = np.load(mask_path + '_masks.npy')
+                return torch.from_numpy(masks).float()
+            except FileNotFoundError:
+                print(f"Warning: Mask file not found: {mask_path}_masks.npy")
+                return None
         else:
             # Load from image files
             mask_dir = os.path.join(self.mask_dir, video_id)
             if os.path.isdir(mask_dir):
+                # Try multiple filename patterns for better compatibility
+                # Pattern 1: *_mask.png (SAM3 output)
                 mask_files = sorted(glob.glob(os.path.join(mask_dir, '*_mask.png')))
+                if len(mask_files) == 0:
+                    # Pattern 2: *.png (any PNG file)
+                    mask_files = sorted(glob.glob(os.path.join(mask_dir, '*.png')))
+                if len(mask_files) == 0:
+                    # Pattern 3: *.jpg (JPEG files)
+                    mask_files = sorted(glob.glob(os.path.join(mask_dir, '*.jpg')))
+
+                if len(mask_files) == 0:
+                    print(f"Warning: No mask files found in {mask_dir}")
+                    return None
+
                 masks = []
                 for mask_file in mask_files[:self.clip_length]:
                     mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)
+                    if mask is None:
+                        print(f"Warning: Failed to read mask file: {mask_file}")
+                        continue
                     mask = mask / 255.0
                     masks.append(mask)
 
                 if len(masks) > 0:
                     masks = np.stack(masks, axis=0)
                     return torch.from_numpy(masks).float()
+                else:
+                    print(f"Warning: No valid masks loaded for video {video_id}")
 
         return None
 

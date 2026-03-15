@@ -348,9 +348,13 @@ try:
         print(f'  Masked dynamic features D: {features_dict["dynamic_masked"].shape}')
         print(f'  ✓ Expected: ({B}, 832)')
         print(f'  ✓ Match: {features_dict["dynamic_masked"].shape == torch.Size([B, 832])}')
-        
-        print(f'  Attention map: {features_dict["attention_map"].shape}')
-        print(f'  ✓ Expected: ({B}, T\', H\', W\')')
+
+        attention_map = features_dict["attention_map"]
+        if attention_map is not None:
+            print(f'  Attention map: {attention_map.shape}')
+            print(f'  ✓ Expected: ({B}, T\', H\', W\')')
+        else:
+            print(f'  Attention map: None (return_attention_map was False)')
         
         print(f'  Fused features: {features_dict["fused"].shape}')
         print(f'  ✓ Expected: ({B}, 1344) = 512 + 832')
@@ -412,7 +416,7 @@ try:
     if 'score' in batch:
         print(f'  score shape: {batch["score"].shape}')
         print(f'  ✓ Expected: ({B},)')
-        print(f'  ✓ Match: {batch["score"].shape == torch.Size([B,)}')
+        print(f'  ✓ Match: {batch["score"].shape == torch.Size([B])}')
     
     if 'global_clip_idx' in batch:
         print(f'  global_clip_idx: {batch["global_clip_idx"]}')
