@@ -84,7 +84,9 @@ class SurgicalVideoDataset(Dataset):
 
         self.clip_length = clip_length
         self.clip_stride = clip_stride
-        self.spatial_size = spatial_size
+        #self.spatial_size = spatial_size
+        # 确保 spatial_size 是一个 (H, W) 的元组，以兼容 OpenCV
+        self.spatial_size = (spatial_size, spatial_size) if isinstance(spatial_size, int) else spatial_size
         self.spatial_crop = spatial_crop
         self.normalize = normalize
         self.transform = transform
@@ -330,7 +332,9 @@ class SurgicalVideoDataset(Dataset):
             pass
 
         # Convert to tensor
-        frames_tensor = torch.from_numpy(frames_np).float() / 255.0
+        #frames_tensor = torch.from_numpy(frames_np).float() / 255.0
+        # Convert to tensor (use .copy() to fix negative strides from flip/rot90)
+        frames_tensor = torch.from_numpy(frames_np.copy()).float() / 255.0
 
         # Normalize to [-1, 1]
         if self.normalize:

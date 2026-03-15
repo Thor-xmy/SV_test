@@ -1,0 +1,103 @@
+# Default Configuration for Surgical Quality Assessment Model
+# With I3D Pretrained Weights
+
+# ============================================================================
+# DATA SETTINGS
+# ============================================================================
+data_root: /path/to/dataset
+batch_size: 8
+num_workers: 4
+
+# Dataset structure:
+#   data_root/
+#     videos/
+#         video_001.mp4
+#         video_002.mp4
+#         ...
+#     masks/
+#         video_001/
+#             frame_0000_mask.png
+#             frame_0001_mask.png
+#             ...
+#         video_002/
+#             ...
+#     annotations.json
+#         {
+#             "video_001": {"score": 8.5, "duration": 120},
+#             "video_002": {"score": 7.2, "duration": 115},
+#             ...
+#         }
+
+# ============================================================================
+# VIDEO PREPROCESSING
+# ============================================================================
+clip_length: 16    # Number of frames per clip
+clip_stride: 10    # Stride for clip extraction
+spatial_size: 112    # Resize video to (H, W) - paper requirement!
+spatial_crop: center    # Crop strategy (center, random, none)
+normalize: true    # Normalize pixel values to [-1, 1]
+
+# ============================================================================
+# MODEL SETTINGS
+# ============================================================================
+static_dim: 512    # ResNet-34 feature dimension (384 from multi-scale → projected to 512)
+dynamic_dim: 1024    # Standard I3D output channels (1024 from Mixed_5c)
+freeze_backbone: true    # Freeze backbone weights
+use_pretrained: true    # Use ImageNet pretrained weights
+use_mask_loss: true    # Use mask supervision loss
+
+# Backbone checkpoints (optional)
+resnet_path: null    # Path to custom ResNet checkpoint
+i3d_path: /home/thor/pytorch-i3d/models/rgb_imagenet.pt  # I3D RGB pretrained weights
+
+# Mask settings
+mask_format: png    # Format of mask files (png, npy, video)
+use_temporal_smoothing: true    # Smooth masks across frames
+
+# ============================================================================
+# TRAINING SETTINGS
+# ============================================================================
+epochs: 100
+learning_rate: 0.0001
+weight_decay: 0 0 0  # Paper requirement: 0!
+momentum: 0.9
+optimizer: adam    # Options: sgd, adam, adamw
+
+# Learning rate scheduler
+lr_scheduler: cosine    # Options: cosine, step, plateau
+lr_milestones: [30, 60, 90]  # For step scheduler
+lr_gamma: 0.1    # LR decay factor
+
+# AMP and mixed precision
+use_amp: false    # Use automatic mixed precision
+clip_grad_norm: 1.0    # Gradient clipping norm (0 to disable)
+
+# Early stopping
+early_stopping: true
+patience: 10    # Paper requirement: 10
+min_delta: 0.001    # Minimum change for improvement
+
+# ============================================================================
+# REGRESSION SETTINGS
+# ============================================================================
+regressor_hidden_dims: [1024, 512, 256, 128]    # Hidden layer dimensions
+
+# ============================================================================
+# LOSS SETTINGS
+# ============================================================================
+lambda_mask: 0.1    # Weight for mask supervision loss
+lambda_score: 1.0    # Weight for score regression loss
+
+# ============================================================================
+# OUTPUT AND LOGGING
+# ============================================================================
+output_dir: ./output
+print_freq: 10    # Print every N steps
+save_freq: 1    # Save checkpoint every N epochs
+log_freq: 10    # TensorBoard log every N steps
+
+# ============================================================================
+# DEVICE SETTINGS
+# ============================================================================
+gpus: 0    # GPU IDs to use (comma-separated)
+seed: 42    # Random seed
