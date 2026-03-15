@@ -70,8 +70,8 @@ def parse_args():
     # Model parameters
     parser.add_argument('--static_dim', type=int, default=512,
                        help='Static feature dimension')
-    parser.add_argument('--dynamic_dim', type=int, default=832,
-                       help='Dynamic feature dimension')
+    parser.add_argument('--dynamic_dim', type=int, default=1024,  # Standard I3D outputs 1024 channels
+                       help='Dynamic feature dimension (1024 for standard I3D)')
     parser.add_argument('--freeze_backbone', action='store_true', default=True,
                        help='Freeze backbone weights')
     parser.add_argument('--use_mask_loss', action='store_true', default=True,
@@ -192,21 +192,24 @@ def build_optimizer(model, config):
     - Weight decay: 0
     """
     # 论文要求的不同学习率
-    backbone_lr = config.get('backbone_lr', 1e-4)      # 0.0001
-    static_lr = config.get('static_lr', 1e-3)          # 0.001
+    # Paper: "I3D backbone network" → 1e-4, "static feature extraction module (ResNet)" → 1e-3
+    backbone_lr = config.get('backbone_lr', 1e-4)      # 0.0001 (for I3D dynamic backbone)
+    static_lr = config.get('static_lr', 1e-3)          # 0.001 (for ResNet static module)
     weight_decay = config.get('weight_decay', 0.0)    # 论文要求0
 
-    # 分组参数：backbone vs 其他模块
+    # 分组参数：
+    # - backbone_params: I3D网络 (dynamic_extractor) → backbone_lr (1e-4)
+    # - other_params: ResNet (static_extractor) + fusion_regressor → static_lr (1e-3)
     backbone_params = []
     other_params = []
 
     for name, param in model.named_parameters():
         if param.requires_grad:
-            # Backbone参数：static_extractor和dynamic_extractor
-            if 'static_extractor' in name or 'dynamic_extractor' in name:
+            # I3D动态骨干网络 → backbone_lr (1e-4)
+            if 'dynamic_extractor' in name:
                 backbone_params.append(param)
             else:
-                # 其他参数：fusion_regressor等
+                # ResNet静态提取器 + 回归模块 → static_lr (1e-3)
                 other_params.append(param)
 
     # 构建参数组

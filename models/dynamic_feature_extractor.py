@@ -267,9 +267,7 @@ class InceptionI3D(nn.Module):
             256 + 320 + 128 + 128, [384, 192, 384, 48, 128, 128], 'Mixed_5c')
 
         # Output at Mixed_5c: (B, 1024, 4, 4, 4)
-        # But we want 832 channels for consistency with custom version
-        # So we add a projection layer: 1024 -> 832
-        self.channel_proj = nn.Conv3d(1024, 832, kernel_size=1)
+        # NO projection layer - keep original 1024 channels for pretraining compatibility
 
     def forward(self, x):
         """Forward pass through I3D backbone up to Mixed_5c."""
@@ -297,10 +295,8 @@ class InceptionI3D(nn.Module):
         x = self.Mixed_5b(x)
         x = self.Mixed_5c(x)
 
-        # Project 1024 -> 832 channels
-        x = self.channel_proj(x)
-
-        return x  # (B, 832, 4, 4, 4) for 112x112 input
+        # Return original 1024 channels for pretraining compatibility
+        return x  # (B, 1024, 4, 4, 4) for 112x112 input
 
 
 class MixedConv3D(nn.Module):
@@ -407,14 +403,14 @@ class DynamicFeatureExtractor(nn.Module):
         # Standard I3D backbone
         self.i3d = InceptionI3D(in_channels=3, num_classes=400)
 
-        # Feature extractor: all layers up to Mixed_5c + channel_proj
+        # Feature extractor: all layers up to Mixed_5c (1024 channels)
         self.feature_extractor = nn.Sequential(
             self.i3d.Conv3d_1a_7x7, self.i3d.MaxPool3d_2a_3x3,
             self.i3d.Conv3d_2b_1x1, self.i3d.Conv3d_2c_3x3, self.i3d.MaxPool3d_3a_3x3,
             self.i3d.Mixed_3b, self.i3d.Mixed_3c, self.i3d.MaxPool3d_4a_3x3,
             self.i3d.Mixed_4b, self.i3d.Mixed_4c, self.i3d.Mixed_4d,
             self.i3d.Mixed_4e, self.i3d.Mixed_4f, self.i3d.MaxPool3d_5a_2x2,
-            self.i3d.Mixed_5b, self.i3d.Mixed_5c, self.i3d.channel_proj
+            self.i3d.Mixed_5b, self.i3d.Mixed_5c
         )
 
         # Mixed convolution layer as per paper1231 Eq.5: F_clip(X_i) = maxpool(Conv_mix(X_i))

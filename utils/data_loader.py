@@ -464,8 +464,22 @@ class SurgicalVideoDataset(Dataset):
             clip_idx = random.randint(0, len(clips) - 1) if self.is_train else 0
             clip = clips[clip_idx]
 
-            # Preprocess frames
-            frames = self._preprocess_frames(clip['frames'])
+            # Determine augmentation parameters (also needed for legacy mode)
+            apply_horizontal_flip = False
+            rotation_k = 0
+
+            if self.is_train:
+                # Decide horizontal flip
+                if hasattr(self, 'horizontal_flip_prob') and self.horizontal_flip_prob > 0:
+                    apply_horizontal_flip = (random.random() < self.horizontal_flip_prob)
+
+                # Decide rotation
+                if hasattr(self, 'enable_rotation') and self.enable_rotation:
+                    if random.random() < 0.5:
+                        rotation_k = random.choice([1, 2, 3])  # 90, 180, or 270 degrees
+
+            # Preprocess frames with augmentation
+            frames = self._preprocess_frames(clip['frames'], apply_horizontal_flip, rotation_k)
 
             # Get score
             score = self.annotations[video_id]['score']

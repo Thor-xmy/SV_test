@@ -120,7 +120,7 @@ class SurgicalQAModel(nn.Module):
 
         self.config = config
         self.static_dim = config.get('static_dim', 512)
-        self.dynamic_dim = config.get('dynamic_dim', 832)
+        self.dynamic_dim = config.get('dynamic_dim', 1024)  # Standard I3D outputs 1024 channels
         self.use_mask_loss = config.get('use_mask_loss', True)
 
         # 1. Static Feature Extractor (ResNet-34)
