@@ -317,9 +317,9 @@ class SurgicalVideoDataset(Dataset):
 
         # Apply rotation (if requested, k = 0, 1, 2, 3 = 0, 90, 180, 270 degrees)
         if rotation_k > 0:
-            for t in range(T):
-                for c in range(C):
-                    frames_np[t, c] = np.rot90(frames_np[t, c], k=rotation_k)
+            # Vectorized rotation: rotate all frames and channels simultaneously
+            # (T, C, H, W) -> rotate on axes (2, 3) = (H, W)
+            frames_np = np.rot90(frames_np, k=rotation_k, axes=(2, 3))
 
         # Crop
         if self.spatial_crop == 'center':
