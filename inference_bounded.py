@@ -40,7 +40,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
         device: 推理设备
 
     Returns:
-        score: 预测分数（JIGSAWS GRS范围 [6, 30]）
+        score: 预测分数（JIGSAWS GRS 范围 [6, 30]）
     """
     print(f"\n正在处理视频: {video_path}")
 
@@ -60,7 +60,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
     print(f"      共 {total_frames} 帧")
 
     if total_frames < 16:
-        print(f"      警告: 视频帧数 ({total) 少于 16，无法处理")
+        print(f"      警告: 视频帧数 ({total_frames}) 少于 16，无法处理")
         return None
 
     # 2. 提取 clip（取中间16帧）
@@ -82,7 +82,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
     clip_tensor = clip_tensor.unsqueeze(0)  # (1, C, T, H, W)
 
     # 4. 加载掩膜
-    print("  4. 加载掩膜...")
+    print(" 4. 加载掩膜...")
     video_id = os.path.splitext(os.path.basename(video_path))[0]
     masks = None
 
@@ -101,7 +101,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
             # Resize 到 112x112
             masks_resized = []
             for i in range(16):
-                mask_resized.append(cv2.resize(masks[i], (112, 112)))
+                masks_resized.append(cv2.resize(masks[i], (112, 112)))
             masks = np.stack(masks_resized, axis=0)
             masks_tensor = torch.from_numpy(masks).float() / 255.0
             masks = masks_tensor.unsqueeze(0)  # (1, T, H, W)
@@ -129,7 +129,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
         print(f"      警告: 未找到掩膜，使用全1掩膜")
 
     # 5. 推理
-    print("  5. 模型推理...")
+    print(" 5. 模型推理...")
     model = model.to(device)
     model.eval()
 
@@ -140,7 +140,7 @@ def process_video(model, video_path, mask_dir, device='cuda'):
 
         score_normalized, _ = model(clip_tensor, masks)
 
-    # 6. 反归一化分数（从 [0,1] 到 [6,30]）
+    # 6. 反归一化分数（从 [0,1] 到 [6, 30]）
     print("  6. 反归一化分数...")
     if hasattr(model, 'denormalize_score'):
         score = model.denormalize_score(
@@ -153,11 +153,10 @@ def process_video(model, video_path, mask_dir, device='cuda'):
     else:
         # 手动反归一化（备用分支）
         score_normalized_np = score_normalized.cpu().numpy() if torch.is_tensor(score_normalized) else score_normalized
-
         if np.ndim(score_normalized_np) == 0:
             score_normalized_np = float(score_normalized_np)
 
-        # 手动公式：(norm - 0) / 1 * (30 - 6) + 6 = (norm - 0) * 24 + 6
+        # 正确的手动公式：(norm - 0) / 1 * (30 - 6) + 6
         score = score_normalized_np * 24.0 + 6.0
 
     return float(score)
@@ -251,7 +250,6 @@ def main():
     model.eval()
 
     print(f"模型已加载: {args.checkpoint}")
-    print(f"分数范围: [{model.score_min}, {model.score_max}]")
 
     # 单视频推理
     if args.video:
