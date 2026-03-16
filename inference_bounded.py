@@ -254,8 +254,8 @@ def main():
     parser.add_argument('--output', type=str, default='predictions.json')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--target_range', type=str, default='6-30',
-                       choices=['1-10', '1-30', '6-30'],
-                       help='目标分数范围: 1-10(论文分数), 1-30(1-30范围), 6-30(JIGSAWS GRS原始分数)')
+                       choices=['1-10', '6-30'],
+                       help='目标分数范围: 1-10(论文分数，用于对比), 6-30(JIGSAWS GRS原始分数)')
     args = parser.parse_args()
 
     # 加载配置
@@ -264,17 +264,15 @@ def main():
         import yaml
         config.update(yaml.safe_load(f))
 
-    # 设置推理目标范围（根据命令行参数）
-    # 注意：这里尊重命令行参数，不强制覆盖配置文件
+    # 设置推理目标范围（根据命令行参数或配置文件）
+    # 优先使用命令行参数，否则使用配置文件
     if args.target_range == '1-10':
         config['inference_target_range'] = [1.0, 10.0]
-    elif args.target_range == '1-30':
-        config['inference_target_range'] = [1.0, 30.0]
     elif args.target_range == '6-30':
         config['inference_target_range'] = [6.0, 30.0]
-
-    # 如果配置文件已有 inference_target_range 且用户没有覆盖，则使用配置文件的值
-    # 这样用户可以通过修改配置文件来设置默认值
+    # 如果未指定命令行参数，使用配置文件的值（如果存在）
+    elif 'inference_target_range' not in config:
+        config['inference_target_range'] = [6.0, 30.0]  # 默认使用 JIGSAWS 原始范围
 
     print("="*60)
     print("Surgical QA 推理 (Bounded Version)")

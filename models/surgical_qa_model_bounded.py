@@ -43,8 +43,8 @@ class SurgicalQAModelBounded(nn.Module):
                 - use_mask_loss: Use mask supervision loss
                 - sampling_strategy: Frame sampling for static features
                 - use_bounded_regression: Use bounded regression (default: True)
-                - score_min: Original score minimum (default: 1.0 for GRS)
-                - score_max: Original score maximum (default: 30.0 for GRS)
+                - score_min: Original score minimum (default: 6.0 for JIGSAWS GRS)
+                - score_max: Original score maximum (default: 30.0 for JIGSAWS GRS)
         """
         super().__init__()
 
@@ -55,7 +55,7 @@ class SurgicalQAModelBounded(nn.Module):
 
         # 新增：分数范围参数
         self.use_bounded_regression = config.get('use_bounded_regression', True)
-        self.score_min = config.get('score_min', 1.0)  # GRS 最小值
+        self.score_min = config.get('score_min', 6.0)  # GRS 最小值 (JIGSAWS: 6)
         self.score_max = config.get('score_max', 30.0)  # GRS 最大值
         self.score_range = self.score_max - self.score_min
 
@@ -190,18 +190,18 @@ class SurgicalQAModelBounded(nn.Module):
         """
         反归一化：将归一化的分数从 [norm_min, norm_max] 转换回目标范围 [target_min, target_max]
 
-        标准使用场景：
+        标准使用场景（JIGSAWS数据集）：
         1. 训练时原始分数 [6, 30] → 归一化到 [0, 1]
-        2. 网络输出 [0, 1] → 反归一化回 [6, 30]（原始范围）
-        3. 网络输出 [0, 1] → 反归一化到 [1, 10]（论文分数）
+        2. 网络输出 [0, 1] → 反归一化回 [6, 30]（JIGSAWS原始范围，默认）
+        3. 网络输出 [0, 1] → 反归一化到 [1, 10]（论文分数，用于对比）
 
         数学公式：
             target = (normalized - norm_min) / (norm_max - norm_min) * (target_max - target_min) + target_min
 
         Args:
-            score_normalized: (B,) or (B, 1) - 归一化后的预测分数
-            target_min: 目标范围的最小值（如 6.0 或 1.0），默认使用 self.score_min
-            target_max: 目标范围的最大值（如 30.0 或 10.0），默认使用 self.score_max
+            score_normalized: (B,) or (B, 1) - 归一化后的预测分数 [0, 1]
+            target_min: 目标范围的最小值（如 6.0 或 1.0），默认使用 self.score_min (6.0)
+            target_max: 目标范围的最大值（如 30.0 或 10.0），默认使用 self.score_max (30.0)
             norm_min: 归一化范围的下限（通常是 0.0），默认 0.0
             norm_max: 归一化范围的上限（通常是 1.0），默认 1.0
 
@@ -209,13 +209,14 @@ class SurgicalQAModelBounded(nn.Module):
             score_target: 反归一化后的分数，范围 [target_min, target_max]
 
         Examples:
-            # 将 [0,1] 映射回原始范围 [6,30]
-            score_6to30 = model.denormalize_score(score_norm,
-                                              target_min=6.0, target_max=30.0)
+            # 将 [0,1] 映射回 JIGSAWS 原始范围 [6,30]（默认，不传参数）
+            score_6to30 = model.denormalize_score(score_norm)
 
-            # 将 [0,1] 映射到论文范围 [1,10]
-            score_1to10 = model.denormalize_score(score_norm,
-                                              target_min=1.0, target_max=10.0)
+            # 或者显式指定
+            score_6to30 = model.denormalize_score(score_norm, target_min=6.0, target_max=30.0)
+
+            # 将 [0,1] 映射到论文范围 [1,10]（用于与其他论文对比）
+            score_1to10 = model.denormalize_score(score_norm, target_min=1.0, target_max=10.0)
         """
         # 处理输入维度
         if score_normalized.dim() == 2:
@@ -354,8 +355,8 @@ if __name__ == '__main__':
         'freeze_backbone': True,
         'use_mask_loss': True,
         'use_bounded_regression': True,  # Use bounded regression
-        'score_min': 1.0,  # GRS minimum
-        'score_max': 30.0  # GRS maximum
+        'score_min': 6.0,  # JIGSAWS GRS minimum
+        'score_max': 30.0  # JIGSAWS GRS maximum
     }
 
     model = SurgicalQAModelBounded(config)

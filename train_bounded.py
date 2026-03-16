@@ -419,7 +419,7 @@ def evaluate(model, dataloader, criterion, device, config):
             video = batch['frames'].to(device)
             score_gt = batch['score'].to(device)
 
-            if 'm' in batch and batch['masks'] is not None:
+            if 'masks' in batch and batch['masks'] is not None:
                 masks = batch['masks'].to(device)
             else:
                 masks = None
@@ -507,10 +507,10 @@ def main():
             'enable_rotation': True,
             'is_train': True,
             # JIGSAWS GRS score normalization
-            'score_min': 6.0,   # GRS minimum
-            'score_max': 30.0,   # GRS maximum
-            'target_min': 0.0,  # Normalize to [0, 1]
-            'target_max': 1.0   # Normalize to [0, 1]
+            'score_min': config.get('score_min', 6.0),   # GRS minimum
+            'score_max': config.get('score_max', 30.0),   # GRS maximum
+            'target_min': config.get('target_min', 0.0),  # Normalize to [0, 1]
+            'target_max': config.get('target_max', 1.0)   # Normalize to [0, 1]
         }
     )
 

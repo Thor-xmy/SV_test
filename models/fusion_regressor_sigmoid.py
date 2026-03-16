@@ -106,7 +106,7 @@ class BoundedFusionRegressor(nn.Module):
 
         Args:
             score_normalized: (B,) 或 (B, 1) - 归一化后的预测，范围 [0, 1]
-            target_min: 目标范围的最小值（如 6.0 或 1.0），默认 1.0
+            target_min: 目标范围的最小值（如 6.0 或 1.0），默认 6.0 (JIGSAWS GRS)
             target_max: 目标范围的最大值（如 30.0 或 10.0），默认 30.0
             norm_min: 归一化范围的下限（默认 0.0）
             norm_max: 归一化范围的上限（默认 1.0）
@@ -123,7 +123,7 @@ class BoundedFusionRegressor(nn.Module):
         # 使用默认值
         norm_min = norm_min if norm_min is not None else 0.0
         norm_max = norm_max if norm_max is not None else 1.0
-        target_min = target_min if target_min is not None else 1.0
+        target_min = target_min if target_min is not None else 6.0  # JIGSAWS GRS 默认最小值
         target_max = target_max if target_max is not None else 30.0
 
         # 计算范围
@@ -173,17 +173,17 @@ if __name__ == '__main__':
     print("Testing denormalization...")
     print("="*60)
 
-    # JIGSAWS GRS: 1-30 → 归一化到 0-1
-    # 推理时反归一化回 1-10
+    # JIGSAWS GRS: 6-30 → 归一化到 0-1
+    # 推理时反归一化回 6-30（原始范围）
     score_original = regressor.denormalize_score(
         score_normalized,
-        score_min=1.0,   # GGRS 最小值
-        score_max=30.0,  # GGRS 最大值
-        target_min=0.0, # 归一化目标最小
-        target_max=1.0  # 归一化目标最大
+        target_min=6.0,   # JIGSAWS GRS 最小值
+        target_max=30.0,  # JIGSAWS GRS 最大值
+        norm_min=0.0,     # 归一化范围最小
+        norm_max=1.0       # 归一化范围最大
     )
 
-    print(f"\nDenormalized score (1-30 range):")
+    print(f"\nDenormalized score (6-30 range):")
     print(f"  shape: {score_original.shape}")
     print(f"  min: {score_original.min().item():.4f}")
     print(f"  max: {score_original.max().item():.4f}")
@@ -192,10 +192,10 @@ if __name__ == '__main__':
     # 测试反归一化到 1-10（用于论文分数）
     score_paper = regressor.denormalize_score(
         score_normalized,
-        score_min=1.0,   # GGRS 最小值
-        score_max=30.0,  # GGRS 最大值
-        target_min=0.0, # 归一化目标最小
-        target_max=1.0  # 归一化目标最大
+        target_min=1.0,   # 论文分数最小值
+        target_max=10.0,  # 论文分数最大值
+        norm_min=0.0,     # 归一化范围最小
+        norm_max=1.0       # 归一化范围最大
     )
 
     print(f"\nDenormalized score (paper 1-10 range):")
