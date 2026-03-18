@@ -141,20 +141,19 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
         fused = torch.cat([static_per_clip, dynamic_per_clip], dim=-1)
         return fused
 
-    def forward(self, video, masks=None, return_features=False):
+    def forward(self, video, return_features=False):
         """
         Forward pass for surgical video quality assessment.
 
         Args:
             video: (B, C, T, H, W) - Entire video
-            masks: (B, T, H, W) or None - Optional instrument masks for mask-guided attention
             return_features: Return intermediate features for analysis
 
         Returns:
             score_normalized: (B, 1) - Predicted quality score in [0, 1]
             If return_features: also return features_dict
         """
-        B, _, _, _, _ = video.shape
+        B, C, T, H, W = video.shape
 
         # 1. Extract multi-clip static features
         # 每个clip采样一个关键帧，提取ResNet特征
@@ -167,8 +166,8 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
         # static_per_clip: (B, num_clips, 512)
 
         # 2. Extract multi-clip dynamic features
-        # 每个clip提取I3D特征，并应用mask-guided attention
-        dynamic_per_clip, num_clips_dynamic = self.dynamic_extractor.extract_multiclip_features(video, masks)
+        # 每个clip提取I3D特征
+        dynamic_per_clip, num_clips_dynamic = self.dynamic_extractor.extract_multiclip_features(video)
         # dynamic_per_clip: (B, num_clips, 1024)
 
         # 确保clips数量一致

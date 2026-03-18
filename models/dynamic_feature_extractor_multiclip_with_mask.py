@@ -1,19 +1,16 @@
 """
-Dynamic Feature Extractor with Multi-Clip Support and Mask-Guided Attention
+Dynamic Feature Extractor with Multi-Clip Support
 
 Modified to extract features from multiple video clips and preserve temporal order.
 
 Key changes from original:
-1. New extract_multiclip_features() method with mask support
+1. New extract_multiclip_features() method
 2. Returns flattened features that preserve temporal sequence
 3. Supports configurable clip length and stride
-4. Added mask-guided attention mechanism for each clip
 
 Usage:
     - Original: (B, 3, 16, H, W) -> (B, 1024)
     - Multi-clip: (B, 3, T_total, H, W) -> (B, 1024 * num_clips)
-
-Reference: paper1231 Eq.11: F_dy(X_i) = F_clip(X_i) ⊙ (A + I)
 """
 
 import torch
@@ -21,7 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from .dynamic_feature_extractor import (
+from .dynamic_feature_extractor import\nfrom .mask_guided_attention_multiclip import MaskGuidedAttentionMultiClip (
     InceptionI3D, MixedConv3D, MaxPool3dSamePadding
 )
 
@@ -49,7 +46,7 @@ class DynamicFeatureMultiClip(nn.Module):
                  clip_length=16,
                  clip_stride=10,
                  max_clips=None):
-        """
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
         Args:
             i3d_path: Path to I3D checkpoint
             use_pretrained_i3d: Use pretrained I3D weights
@@ -59,7 +56,7 @@ class DynamicFeatureMultiClip(nn.Module):
             clip_length: Length of each clip (default: 16)
             clip_stride: Stride between clips (default: 10, overlap=6)
             max_clips: Maximum number of clips to process (None = use all)
-        """
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
         super().__init__()
 
         self.output_dim = output_dim
@@ -77,7 +74,7 @@ class DynamicFeatureMultiClip(nn.Module):
             self.i3d.Conv3d_2b_1x1, self.i3d.Conv3d_2c_3x3, self.i3d.MaxPool3d_3a_3x3,
             self.i3d.Mixed_3b, self.i3d.Mixed_3c, self.i3d.MaxPool3d_4a_3x3,
             self.i3d.Mixed_4b, self.i3d.Mixed_4c, self.i3d.Mixed_4d,
-            self.i3d.Mixed_4e, self.i3d.Mixed_4f, self.i3d.MaxPool3d_5a_2x2,
+            self.i3d.Mixed_4e, self.i3d.Mixed_4f, self.i3d.MaxPool3d_5a_2x2,\n        self.mask_attention = None
             self.i3d.Mixed_5b, self.i3d.Mixed_5c
         )
 
@@ -99,7 +96,7 @@ class DynamicFeatureMultiClip(nn.Module):
             self.load_checkpoint(i3d_path)
 
     def load_checkpoint(self, checkpoint_path):
-        """Load I3D checkpoint."""
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extractedLoad I3D checkpoint."""
         print("Loading I3D checkpoint from {}".format(checkpoint_path))
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
@@ -118,10 +115,10 @@ class DynamicFeatureMultiClip(nn.Module):
         if unexpected_keys:
             print("  Unexpected keys (ignored): {}".format(len(unexpected_keys)))
 
-        print("  ✓ Checkpoint loaded successfully")
+        print("  ✓ Checkpoint loaded successfully")\n\n        # Initialize mask attention module\n        self.mask_attention = MaskGuidedAttentionMultiClip(\n            enable_temporal_smoothing=enable_temporal_smoothing,\n            clip_length=clip_length,\n            clip_stride=clip_stride\n        )
 
     def _split_into_clips(self, video):
-        """
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
         Split video into overlapping clips.
 
         Args:
@@ -130,8 +127,8 @@ class DynamicFeatureMultiClip(nn.Module):
         Returns:
             clips: list of (B, C, clip_length, H, W)
             start_indices: list of starting frame indices
-        """
-        B, C, T, H, W = video.shape
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
+        B, C, T, H, W = video.shape\n\n        # Handle masks\n        if masks is None:\n            # Create all-ones mask (no masking)\n            masks = torch.ones(B, T, H, W, device=video.device)
 
         # Calculate number of clips
         if T <= self.clip_length:
@@ -162,154 +159,37 @@ class DynamicFeatureMultiClip(nn.Module):
 
         return clips, start_indices
 
-    def _split_masks_into_clips(self, masks, num_clips):
-        """
-        Split masks into clips matching video clips.
-
-        Args:
-            masks: (B, T, H, W) or (B, 1, T, H, W)
-            num_clips: Number of clips to extract
-
-        Returns:
-            mask_clips: list of (B, clip_length, H, W)
-        """
-        # Handle both (B, T, H, W) and (B, 1, T, H, W) formats
-        if masks.dim() == 5:
-            masks = masks.squeeze(1)  # (B, 1, T, H, W) -> (B, T, H, W)
-
-        B, T, H, W = masks.shape
-
-        mask_clips = []
-        for i in range(num_clips):
-            start_idx = i * self.clip_stride
-            end_idx = start_idx + self.clip_length
-
-            if end_idx > T:
-                # Pad if clip extends beyond mask length
-                mask_clip = masks[:, start_idx:T, :, :]
-                pad_len = self.clip_length - (T - start_idx)
-                mask_clip = F.pad(mask_clip, (0, 0, 0, 0, 0, pad_len), mode='constant', value=0)
-            else:
-                mask_clip = masks[:, start_idx:end_idx, :, :]
-
-            mask_clips.append(mask_clip)
-
-        return mask_clips
-
-    def _temporal_smoothing(self, masks, target_T=None):
-        """
-        Apply temporal smoothing to masks as in paper1231.
-
-        Paper formula: M_gt[w,h] = f_2D(sum(M^{2t-1,w,h} + M^{2t,w,h}))
-
-        This reduces jitter and local instability in single-frame masks.
-
-        Args:
-            masks: (B, T, H, W)
-            target_T: Target temporal dimension for I3D alignment
-
-        Returns:
-            smoothed_masks: (B, T_out, H', W')
-        """
-        B, T, H, W = masks.shape
-
-        if T < 2:
-            return masks
-
-        # Sum adjacent frames: M^{2t-1} + M^{2t}
-        num_pairs = T // 2
-        even_frames = masks[:, 0:num_pairs*2:2, :, :]  # M^0, M^2, ...
-        odd_frames = masks[:, 1:num_pairs*2:2, :, :]   # M^1, M^3, ...
-
-        # Sum adjacent pairs
-        summed = even_frames + odd_frames  # (B, num_pairs, H, W)
-
-        # Apply 2D average pooling (f_2D)
-        smoothed = F.avg_pool2d(summed, kernel_size=2, stride=2, padding=0)  # (B, num_pairs, H/2, W/2)
-
-        # Normalize to [0, 1]
-        smoothed = smoothed / 2.0
-
-        # If target temporal dimension is specified, interpolate to match I3D features
-        if target_T is not None and smoothed.size(1) != target_T:
-            # Permute to (B, H, W, T) for interpolation, then permute back
-            smoothed = smoothed.permute(0, 2, 3, 1)  # (B, H, W, T/2)
-            smoothed = F.interpolate(
-                smoothed.unsqueeze(1),  # Add channel dim: (B, 1, H, W, T/2)
-                size=(smoothed.size(1), smoothed.size(2), target_T),
-                mode='trilinear',
-                align_corners=False
-            ).squeeze(1)  # (B, H, W, T)
-            smoothed = smoothed.permute(0, 3, 1, 2)  # (B, T, H, W)
-
-        return smoothed
-
     def extract_multiclip_features(self, video, masks=None):
-        """
-        Extract features from multiple clips with optional mask-guided attention.
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
+        Extract features from multiple clips.
 
         Args:
             video: (B, C, T, H, W) - Input video
-            masks: (B, T, H, W) or (B, 1, T, H, W) - Optional instrument masks
-                   If None, no mask-guided attention is applied
 
         Returns:
             features_per_clip: (B, num_clips, output_dim) - Per-clip features
             num_clips: Number of clips extracted
-        """
-        B, C, T, H, W = video.shape
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
+        B, C, T, H, W = video.shape\n\n        # Handle masks\n        if masks is None:\n            # Create all-ones mask (no masking)\n            masks = torch.ones(B, T, H, W, device=video.device)
 
-        # Split video into clips
+        # Split video into clips\n        # Check if we should return attention maps\n        return_attention = masks is not None
         clips, start_indices = self._split_into_clips(video)
         num_clips = len(clips)
 
         if num_clips == 0:
             raise ValueError(f"Video has only {T} frames, which is too short for clip_length={self.clip_length}")
 
-        # Handle masks
-        if masks is not None:
-            # Split masks into clips matching video clips
-            mask_clips = self._split_masks_into_clips(masks, num_clips)
-        else:
-            mask_clips = None
-
-        # Process clips one by one
+        # Stack all clips: (B*num_clips, C, clip_length, H, W)
+        # Approach 1: Process clips one by one (simpler, less memory)
         features_list = []
 
-        for idx, clip in enumerate(clips):
-            # Extract I3D features: (B, 1024, T', H', W')
-            feat = self.feature_extractor(clip)
+        for clip in clips:
+            # Extract features for this clip
+            feat = self.feature_extractor(clip)  # (B, 1024, T', H', W')
 
             # Apply mixed convolution if enabled
             if self.use_mixed_conv:
                 feat = self.mixed_conv(feat)  # (B, 1024, T', H', W')
-
-            # Apply mask-guided attention if masks provided
-            if mask_clips is not None:
-                mask_clip = mask_clips[idx]  # (B, clip_length, H, W)
-
-                # Step 1: Temporal smoothing
-                mask_smoothed = self._temporal_smoothing(mask_clip, target_T=feat.size(2))
-
-                # Step 2: Spatial alignment with I3D feature map
-                # I3D features: (B, C, T', H', W')
-                # Masks: (B, T_mask, H_mask, W_mask)
-
-                _, C_feat, T_feat, H_feat, W_feat = feat.shape
-
-                # Upsample/Downsample masks to match I3D feature resolution
-                masks_5d = mask_smoothed.unsqueeze(1)  # (B, 1, T, H', W')
-                masks_aligned = F.interpolate(
-                    masks_5d,
-                    size=(T_feat, H_feat, W_feat),
-                    mode='trilinear',
-                    align_corners=False
-                )  # (B, 1, T', H', W')
-
-                # Step 3: Apply mask attention: F_masked = F_i3d * (A + 1.0)
-                # This is paper1231 Eq.11: F_dy(X_i) = F_clip(X_i) ⊙ (A + I)
-                attention_map = masks_aligned.squeeze(1)  # (B, T', H', W')
-                feat = feat * (attention_map.unsqueeze(1) + 1.0)  # (B, C, T', H', W')
 
             # Pool to get single feature vector per clip
             feat = F.adaptive_avg_pool3d(feat, (1, 1, 1))  # (B, 1024, 1, 1, 1)
@@ -325,10 +205,10 @@ class DynamicFeatureMultiClip(nn.Module):
 
         # Return in order: (per_clip_features, num_clips)
         # This matches static extractor interface
-        return features_per_clip, num_clips
+        if self.use_mask_guided_attention:\n            masked_features, attention_maps = self.mask_attention(\n                features_per_clip, masks, num_clips=num_clips\n            )\n            # Mask-guided attention already handles pooling\n            return masked_features, num_clips, attention_maps\n        else:\n            # No mask-guided attention, just pool features\n            pooled_features = F.adaptive_avg_pool3d(features_per_clip, (1, 1, 1, 1))\n            pooled_features = pooled_features.flatten(2)\n            return features_per_clip, num_clips
 
     def forward(self, video, return_features_map=False):
-        """
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
         Extract dynamic features from video (backward compatibility).
 
         This method keeps the original interface for single-clip processing.
@@ -343,7 +223,7 @@ class DynamicFeatureMultiClip(nn.Module):
                 pooled_features: (B, output_dim)
             Else:
                 features: (B, output_dim)
-        """
+        """\n        masks: (B, T, H, W) - Optional instrument masks [0, 1]\n                   If None, no mask-guided attention is applied\n        Returns:\n            features_per_clip: (B, num_clips, output_dim)\n            num_clips: Number of clips extracted
         features = self.feature_extractor(video)  # (B, 1024, 2, 4, 4)
 
         if self.use_mixed_conv:

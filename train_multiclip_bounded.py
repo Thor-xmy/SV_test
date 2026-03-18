@@ -139,11 +139,14 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config):
 
     for batch_idx, batch in enumerate(dataloader):
         video = batch['video'].to(device)
+        masks = batch.get('masks', None)
+        if masks is not None:
+            masks = masks.to(device)
         score_gt = batch['score'].to(device)
 
         batch_size = video.size(0)
 
-        score_pred = model(video)
+        score_pred = model(video, masks)
         loss, loss_dict = model.compute_loss(score_pred, score_gt)
 
         optimizer.zero_grad()
@@ -176,11 +179,14 @@ def validate(model, dataloader, device, config):
     with torch.no_grad():
         for batch in dataloader:
             video = batch['video'].to(device)
+            masks = batch.get('masks', None)
+            if masks is not None:
+                masks = masks.to(device)
             score_gt = batch['score'].to(device)
 
             batch_size = video.size(0)
 
-            score_pred = model(video)
+            score_pred = model(video, masks)
             loss, _ = model.compute_loss(score_pred, score_gt)
 
             loss_meter.update(loss.item(), batch_size)
