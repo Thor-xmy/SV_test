@@ -12,17 +12,19 @@
 # ============================================================================
 # DATA SETTINGS
 # ============================================================================
-data_root: /home/thor/sam3/jigsawas  # JIGSAWS 数据集根目录
-batch_size: 8
+data_root: /root/autodl-tmp/SV_test/data  # JIGSAWS 数据集根目录
+batch_size: 4
 num_workers: 4
+split_ratio: [0.7, 0.15, 0.15]  # 新增：70%训练，15%验证，15%测试
+split_seed: 42
 
 # ============================================================================
 # SCORE NORMALIZATION SETTINGS
 # ============================================================================
 # JIGSAWS GRS 分数范围：6-30
 # 归一化到 0-1 范围用于训练
-score_min: 6.0           # 原始 GRS 分数最小值
-score_max: 30.0          # 原始 GRS 分数最大值
+score_min: 5.0           # 原始 GRS 分数最小值
+score_max: 25.0          # 原始 GRS 分数最大值
 target_min: 0.0         # 归一化目标最小值（用于训练）
 target_max: 1.0         # 归一化目标最大值（用于训练）
 
@@ -47,13 +49,13 @@ normalize: true       # 归一化像素值到 [-1, 1]
 # ============================================================================
 static_dim: 512        # ResNet-34 特征维度
 dynamic_dim: 1024      # I3D 特征维度（标准 Mixed_5c 输出）
-freeze_backbone: true   # 冻结主干网络
+freeze_backbone: false   # 冻结主干网络
 use_pretrained: true   # 使用 ImageNet 预训练权重
-use_mask_loss: true   # 使用掩膜监督损失
-
+#use_mask_loss: true   # 使用掩膜监督损失
+use_mask: false
 # Backbone checkpoints
 resnet_path: null       # ResNet 检查点路径
-i3d_path: null         # I3D 检查点路径
+i3d_path: /root/autodl-tmp/PyTorchConv3D/checkpoints/I3D/rgb_imagenet.pth         # I3D 检查点路径
 
 # ============================================================================
 # BOUNDED REGRESSION SETTINGS
@@ -95,13 +97,13 @@ min_delta: 0.001      # 最小改进阈值
 # ============================================================================
 # LOSS SETTINGS
 # ============================================================================
-lambda_mask: 0.1       # 掩膜监督损失权重
-lambda_score: 1.0      # 分数回归损失权重
+#lambda_mask: 0.1       # 掩膜监督损失权重
+#lambda_score: 1.0      # 分数回归损失权重
 
 # ============================================================================
 # OUTPUT AND LOGGING
 # ============================================================================
-output_dir: ./output_bounded
+output_dir: ./output_muticlip_bounded
 print_freq: 10        # 每 N 步打印一次
 save_freq: 1          # 每 N 轮保存一次检查点
 log_freq: 10          # 每 N 步记录一次 Tensor

@@ -12,7 +12,7 @@ This follows the "方案A" (per-clip fusion) approach:
 - For each clip: [Dynamic_clip, Static_clip] -> fused_clip
 - Concatenate all fused clips -> temporal sequence
 """
-
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

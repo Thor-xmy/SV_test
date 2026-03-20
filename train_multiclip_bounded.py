@@ -27,13 +27,14 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from models.surgical_qa_model_multiclip_bounded import SurgicalQAModelMultiClipBounded, build_model_multiclip_bounded
-from utils.data_loader_video_level import VideoLevelDataset, create_video_level_dataloader
+# Modified to use frame sequence loader with proper data splitting
+from utils.data_loader_video_level_frames import create_dataloader_with_split
 from utils.training import AverageMeter, compute_metrics
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Multi-Clip Bounded Surgical QA Model')
-    parser.add_argument('--config', type=str, default='configs/multiclip_bounded.yaml')
+    parser.add_argument('--config', type=str, default='configs/bounded.yaml')
     parser.add_argument('--data_root', type=str, default=None, help='Root directory of dataset')
     parser.add_argument('--output_dir', type=str, default='output_multiclip_bounded')
     parser.add_argument('--epochs', type=int, default=100)
@@ -48,8 +49,12 @@ def parse_args():
     parser.add_argument('--max_clips', type=int, default=None)
     parser.add_argument('--freeze_backbone', action='store_true', default=True)
     parser.add_argument('--use_mixed_conv', action='store_true', default=True)
-    parser.add_argument('--score_min', type=float, default=6.0)
-    parser.add_argument('--score_max', type=float, default=30.0)
+    
+    # 🌟 修改点 1：将 score_min 和 score_max 的默认值设为 None
+    # 这样它们就不会强行覆盖你 bounded.yaml 里设置的 5.0 和 25.0 了
+    parser.add_argument('--score_min', type=float, default=None)
+    parser.add_argument('--score_max', type=float, default=None)
+    
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--pretrained', action='store_true', default=True)
     parser.add_argument('--gpu', type=int, default=0)
@@ -114,19 +119,30 @@ def setup_device(gpu_id):
         print("Using CPU")
     return device
 
-
+# 这里的双学习率代码你已经加得很完美了，完全保留
 def build_optimizer(model, config):
-    lr = config.get('learning_rate', 1e-4)
+    base_lr = config.get('learning_rate', 1e-4)
     weight_decay = config.get('weight_decay', 1e-5)
 
-    optimizer = optim.Adam(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=lr,
-        weight_decay=weight_decay
-    )
+    backbone_params = []
+    other_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        # 假设动态特征提取器（I3D）的名字包含 'dynamic_extractor'
+        if 'dynamic_extractor' in name:
+            backbone_params.append(param)
+        else:
+            other_params.append(param)
+
+    # I3D 使用 base_lr (1e-4)，其他层（静态+回归头）使用 base_lr * 10 (1e-3)
+    optimizer = optim.Adam([
+        {'params': backbone_params, 'lr': base_lr},
+        {'params': other_params, 'lr': base_lr * 10.0}
+    ], weight_decay=weight_decay)
 
     return optimizer
-
 
 def train_epoch(model, dataloader, optimizer, device, epoch, config):
     model.train()
@@ -154,8 +170,8 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config):
         optimizer.step()
 
         loss_meter.update(loss.item(), batch_size)
-        pred_scores.extend(score_pred.squeeze(-1).cpu().numpy())
-        gt_scores.extend(score_gt.cpu().numpy())
+        pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
+        gt_scores.extend(score_gt.detach().cpu().numpy())
 
         if (batch_idx + 1) % print_freq == 0:
             print(f"Epoch [{epoch}] [{batch_idx + 1}/{len(dataloader)}] "
@@ -190,8 +206,8 @@ def validate(model, dataloader, device, config):
             loss, _ = model.compute_loss(score_pred, score_gt)
 
             loss_meter.update(loss.item(), batch_size)
-            pred_scores.extend(score_pred.squeeze(-1).cpu().numpy())
-            gt_scores.extend(score_gt.cpu().numpy())
+            pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
+            gt_scores.extend(score_gt.detach().cpu().numpy())
 
     pred_scores = np.array(pred_scores)
     gt_scores = np.array(gt_scores)
@@ -266,7 +282,12 @@ def main():
         start_epoch = checkpoint['epoch'] + 1
         print(f"Resuming from epoch {start_epoch}")
 
-    train_loader = create_video_level_dataloader(
+    # 🌟 修改点 2：将 YAML 里的 use_mask 开关透传给 DataLoader
+    # 默认 True 表示如果你没在 YAML 里写这个参数，它就会像以前一样加载 Mask
+    use_mask = config.get('use_mask', True)
+
+    # Create dataloaders with proper data splitting (70/15/15 train/val/test)
+    train_loader = create_dataloader_with_split(
         data_root=config['data_root'],
         batch_size=config['batch_size'],
         num_workers=config['num_workers'],
@@ -275,10 +296,17 @@ def main():
         clip_stride=config['clip_stride'],
         score_min=config['score_min'],
         score_max=config['score_max'],
-        is_train=True
+        # Data splitting parameters
+        subset='train',
+        train_ratio=config.get('train_ratio', 0.7),
+        val_ratio=config.get('val_ratio', 0.15),
+        test_ratio=config.get('test_ratio', 0.15),
+        split_seed=config.get('split_seed', 42),
+        is_train=True,
+        use_mask=use_mask  # 🌟 传入开关
     )
 
-    val_loader = create_video_level_dataloader(
+    val_loader = create_dataloader_with_split(
         data_root=config['data_root'],
         batch_size=config['batch_size'],
         num_workers=config['num_workers'],
@@ -287,7 +315,14 @@ def main():
         clip_stride=config['clip_stride'],
         score_min=config['score_min'],
         score_max=config['score_max'],
-        is_train=False
+        # Data splitting parameters
+        subset='val',
+        train_ratio=config.get('train_ratio', 0.7),
+        val_ratio=config.get('val_ratio', 0.15),
+        test_ratio=config.get('test_ratio', 0.15),
+        split_seed=config.get('split_seed', 42),
+        is_train=False,
+        use_mask=use_mask  # 🌟 传入开关
     )
 
     for epoch in range(start_epoch, config['epochs']):
