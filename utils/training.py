@@ -535,3 +535,45 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, device='cpu'):
 if __name__ == '__main__':
     # Test training utilities
     print("Training utilities test passed successfully!")
+
+
+def compute_metrics(pred_scores, gt_scores):
+    """
+    Compute evaluation metrics.
+
+    Args:
+        pred_scores: Predicted scores (numpy array or list)
+        gt_scores: Ground truth scores (numpy array or list)
+
+    Returns:
+        metrics: Dict containing evaluation metrics
+            - spearman: Spearman rank correlation coefficient
+            - l2: L2 distance (Euclidean)
+            - rl2: Relative L2 error
+            - mae: Mean absolute error
+    """
+    import scipy.stats as stats
+
+    pred_scores = np.array(pred_scores)
+    gt_scores = np.array(gt_scores)
+
+    # Spearman rank correlation
+    spearman, _ = stats.spearmanr(pred_scores, gt_scores)
+
+    # L2 distance (Euclidean)
+    l2 = np.linalg.norm(pred_scores - gt_scores)
+
+    # Relative L2 error
+    rl2 = l2 / np.linalg.norm(gt_scores) if np.linalg.norm(gt_scores) > 0 else 0.0
+
+    # Mean absolute error
+    mae = np.mean(np.abs(pred_scores - gt_scores))
+
+    metrics = {
+        'spearman': spearman,
+        'l2': l2,
+        'rl2': rl2,
+        'mae': mae
+    }
+
+    return metrics
