@@ -23,7 +23,7 @@ Pipeline:
             ↓ Regressor
       Score: (B, 1) in [0, 1] (normalized)
 """
-
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -183,6 +183,11 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
 
         # 确保clips数量一致
         num_clips = min(num_clips_static, num_clips_dynamic)
+        # ==========================================
+        # 🌟 插入你的监控探头：只打印第一个 Batch 的信息防止刷屏
+        if random.random() < 0.05:  # 有 5% 的概率会在终端打印出来，足够你抽查了
+            print(f"\n👉 [Debug] 当前视频的真实物理长度切出了: {num_clips} 个 Clips。即将被对齐到 {self.expected_clips} 个！")
+        # ==========================================
         if num_clips_static != num_clips_dynamic:
             print(f"Warning: Static clips ({num_clips_static}) != Dynamic clips ({num_clips_dynamic}), using {num_clips}")
 
