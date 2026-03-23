@@ -253,8 +253,18 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
 
     pred_scores = np.array(pred_scores)
     gt_scores = np.array(gt_scores)
-    metrics = compute_metrics(pred_scores, gt_scores)
-
+    # 1. 从 config 获取真实分数的上下界
+    score_min = config.get('score_min', 5.0)
+    score_max = config.get('score_max', 25.0)
+    score_range = score_max - score_min
+    
+    # 2. 将 [0, 1] 范围的分数反归一化回真实分数范围 (例如 5~25)
+    pred_scores_real = pred_scores * score_range + score_min
+    gt_scores_real = gt_scores * score_range + score_min
+    
+    # 3. 计算具有真实对比意义的 Metrics
+    #metrics = compute_metrics(pred_scores, gt_scores)
+    metrics = compute_metrics(pred_scores_real, gt_scores_real)
     return loss_meter.avg, metrics
 
 
@@ -284,8 +294,15 @@ def validate(model, dataloader, device, config):
 
     pred_scores = np.array(pred_scores)
     gt_scores = np.array(gt_scores)
-    metrics = compute_metrics(pred_scores, gt_scores)
-
+    #metrics = compute_metrics(pred_scores, gt_scores)
+    score_min = config.get('score_min', 5.0)
+    score_max = config.get('score_max', 25.0)
+    score_range = score_max - score_min
+    
+    pred_scores_real = pred_scores * score_range + score_min
+    gt_scores_real = gt_scores * score_range + score_min
+    
+    metrics = compute_metrics(pred_scores_real, gt_scores_real)
     return loss_meter.avg, metrics
 
 
@@ -358,7 +375,11 @@ def main():
     # 🌟 修改点 2：将 YAML 里的 use_mask 开关透传给 DataLoader
     # 默认 True 表示如果你没在 YAML 里写这个参数，它就会像以前一样加载 Mask
     use_mask = config.get('use_mask', True)
-
+    # 解析 YAML 中的 split_ratio 数组
+    split_ratio_config = config.get('split_ratio', [0.7, 0.15, 0.15])
+    parsed_train_ratio = split_ratio_config[0]
+    parsed_val_ratio = split_ratio_config[1]
+    parsed_test_ratio = split_ratio_config[2]
     # Create dataloaders with proper data splitting (70/15/15 train/val/test)
     train_loader = create_dataloader_with_split(
         data_root=config['data_root'],
@@ -371,9 +392,9 @@ def main():
         score_max=config['score_max'],
         # Data splitting parameters
         subset='train',
-        train_ratio=config.get('train_ratio', 0.7),
-        val_ratio=config.get('val_ratio', 0.15),
-        test_ratio=config.get('test_ratio', 0.15),
+        train_ratio=parsed_train_ratio,
+        val_ratio=parsed_val_ratio,
+        test_ratio=parsed_test_ratio,
         split_seed=config.get('split_seed', 42),
         is_train=True,
         use_mask=use_mask  # 🌟 传入开关
@@ -390,9 +411,9 @@ def main():
         score_max=config['score_max'],
         # Data splitting parameters
         subset='val',
-        train_ratio=config.get('train_ratio', 0.7),
-        val_ratio=config.get('val_ratio', 0.15),
-        test_ratio=config.get('test_ratio', 0.15),
+        train_ratio=parsed_train_ratio,
+        val_ratio=parsed_val_ratio,
+        test_ratio=parsed_test_ratio,
         split_seed=config.get('split_seed', 42),
         is_train=False,
         use_mask=use_mask  # 🌟 传入开关
