@@ -3,3 +3,5 @@ txt/
 output_multiclip_bounded/
 batch_masks_frames/
 previous_heichole_withwhite/
+test_results/
+test_results_analysis/
