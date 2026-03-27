@@ -456,7 +456,7 @@ if __name__ == '__main__':
         (2, 3, 50, 112, 112),    # 50 frames -> 5 clips
         (2, 3, 16, 112, 112),    # 16 frames -> 1 clip
     ]
-
+    '''
     for video_shape in test_cases:
         video = torch.randn(*video_shape)
         flattened, per_clip, num_clips = model.extract_multiclip_features(video)
@@ -471,5 +471,18 @@ if __name__ == '__main__':
 
         assert flattened.shape == (video_shape[0], expected_dim)
         assert per_clip.shape == (video_shape[0], num_clips, 1024)
+    '''
+    for video_shape in test_cases:
+        video = torch.randn(*video_shape)
+        # 🌟 修改点：只接收 2 个返回值
+        per_clip, num_clips = model.extract_multiclip_features(video)
 
+        print(f"\nInput: {video_shape}")
+        print(f"  Number of clips: {num_clips}")
+        print(f"  Per-clip features shape: {per_clip.shape}")
+
+        # 🌟 修改点：只断言 per_clip 的维度
+        assert per_clip.shape == (video_shape[0], num_clips, 1024)
+
+    
     print("\n✓ All tests passed!")

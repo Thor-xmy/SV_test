@@ -52,6 +52,7 @@ def main():
 
     # 用于最后计算整体平均指标
     all_folds_spearman = []
+    all_folds_l2 = []
 
     # 2. 遍历每一折
     for fold in range(num_folds):
@@ -134,7 +135,7 @@ def main():
         # 4. 计算这一折的宏观指标
         metrics = compute_metrics(np.array(pred_scores_for_metric), np.array(gt_scores_for_metric))
         all_folds_spearman.append(metrics['spearman'])
-
+        all_folds_l2.append(metrics['l2'])  # 🌟 新增：记录这折的 L2
         print(f"✅ Fold {fold} 测试完毕！(共 {len(fold_results)} 个视频)")
         print(f"   Spearman: {metrics['spearman']:.4f}")
         print(f"   L2 Error: {metrics['l2']:.4f}")
@@ -146,6 +147,7 @@ def main():
         print("📊 所有折测试集汇总成绩")
         print("="*70)
         print(f"平均 Spearman: {np.mean(all_folds_spearman):.4f} ± {np.std(all_folds_spearman):.4f}")
+        print(f"平均 L2 Error: {np.mean(all_folds_l2):.4f} ± {np.std(all_folds_l2):.4f}")
         print(f"数据全部保存在: {args.output_dir}/ 目录下。你可以用 Excel 打开它们进行深入分析。")
         print("="*70)
 
