@@ -13,7 +13,7 @@
 # DATA SETTINGS
 # ============================================================================
 data_root: /root/autodl-tmp/SV_test/data  # JIGSAWS 数据集根目录
-batch_size: 6
+batch_size: 2
 num_workers: 4
 num_folds: 4
 #split_ratio: [0.7, 0.15, 0.15]  # 新增：70%训练，15%验证，15%测试
@@ -50,7 +50,7 @@ normalize: true       # 归一化像素值到 [-1, 1]
 # ============================================================================
 static_dim: 512        # ResNet-34 特征维度
 dynamic_dim: 1024      # I3D 特征维度（标准 Mixed_5c 输出）
-freeze_backbone: true   # 冻结主干网络
+freeze_backbone: false   # 冻结主干网络
 use_pretrained: true   # 使用 ImageNet 预训练权重
 #use_mask_loss: true   # 使用掩膜监督损失
 use_mask: false
@@ -63,16 +63,16 @@ i3d_path: /root/autodl-tmp/PyTorchConv3D/checkpoints/I3D/rgb_imagenet.pth       
 # BOUNDED REGRESSION SETTINGS
 # ============================================================================
 use_bounded_regression: true   # 使用有界回归器（推荐）
-regressor_hidden_dims: [512,256,128]  # 隐藏层维度
-regressor_dropout: 0.5
+regressor_hidden_dims: [512,256]  # 隐藏层维度
+regressor_dropout: 0.4
 # ============================================================================
 # TRAINING SETTINGS
 # ============================================================================
 epochs: 100
 #learning_rate: 0.0001
-weight_decay: 0.0001      # 论文要求: 0!
+weight_decay: 0.0001      
 momentum: 0.9
-optimizer: adam        # 选项: sgd, adam, adamw
+optimizer: adamw        # 选项: sgd, adam, adamw
 
 # Learning rate scheduler
 lr_scheduler: cosine      # 选项: cosine, step, plateau
@@ -80,8 +80,8 @@ lr_milestones: [30, 60, 90]
 lr_gamma: 0.1
 
 # 差分学习率（论文要求）
-backbone_lr: 0.0001     # I3D 主干网络学习率
-static_lr: 0.0001       # ResNet + 回归器学习率
+backbone_lr: 0.00001     # I3D 主干网络学习率
+static_lr: 0.0002       # ResNet + 回归器学习率
 
 
 # ============================================================================
@@ -128,6 +128,6 @@ max_clips: 71         # 🌟 告诉底层 I3D/ResNet：切到 72 个就立刻停
 # TRANSFORMER SETTINGS (NEW)
 # ============================================================================
 transformer_heads: 8        # 注意力头数 (推荐 8)
-transformer_layers: 2       # Transformer 层数 (层数太多可能过拟合，推荐 1~3 层)
+transformer_layers: 1       # Transformer 层数 (层数太多可能过拟合，推荐 1~3 层)
 transformer_ffn: 2048       # 前馈网络隐藏层维度
 transformer_dropout: 0.3    # 防止过拟合的 Dropout

@@ -52,6 +52,7 @@ class BoundedFusionRegressorMultiClip(nn.Module):
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate / 2.0),
             nn.Linear(64, 1),
+            #nn.LayerNorm(1), ###############################################
             nn.Sigmoid()  # ← 关键：添加 Sigmoid 激活函数
         ])
 
