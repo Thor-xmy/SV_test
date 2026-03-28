@@ -126,7 +126,7 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
             #use_pretrained=config.get('use_pretrained', True),
             use_pretrained=config.get('use_pretrained_resnet', True),
             #freeze_early_layers=config.get('freeze_backbone', True),
-            freeze_early_layers=False,  # 🌟 强行设为 False，保证 ResNet34 始终全量参与训练！
+            freeze_early_layers=True,  # 🌟 强行设为 False，保证 ResNet34 始终全量参与训练！
             output_dim=self.static_dim,
             keyframe_strategy=self.keyframe_strategy
         )
@@ -150,6 +150,7 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
         # 3. Fusion and Regression Module
         # Initialize in __init__ with expected number of clips
         # This ensures optimizer can find all parameters from the start
+        '''
         self.total_clip_dim = self.static_dim + self.dynamic_dim
 
         # === 🌟 新增：Transformer 时序建模模块 ===
@@ -181,6 +182,60 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
             hidden_dims=self.config.get('regressor_hidden_dims', [1024, 512, 256, 128]),
             dropout_rate=self.config.get('regressor_dropout', 0.5)
         )
+        '''
+        self.total_clip_dim = self.static_dim + self.dynamic_dim
+
+        # ==========================================================
+        # 🌟 核心修改：动态瓶颈层 (Bottleneck Layer)
+        # ==========================================================
+        self.use_bottleneck = self.config.get('use_bottleneck', False)
+        self.bottleneck_dim = self.config.get('bottleneck_dim', 128)
+
+        if self.use_bottleneck:
+            print(f"  [Bottleneck ENABLED] 压缩特征: {self.total_clip_dim}D -> {self.bottleneck_dim}D")
+            self.feature_compressor = nn.Sequential(
+                nn.Linear(self.total_clip_dim, self.bottleneck_dim),
+                nn.LayerNorm(self.bottleneck_dim),
+                nn.GELU(),
+                nn.Dropout(0.5)
+            )
+            transformer_input_dim = self.bottleneck_dim
+            # 如果开启了严重降维，回归头也应该随之精简，避免头重脚轻
+            default_hidden_dims = [64, 32] 
+        else:
+            print(f"  [Bottleneck DISABLED] 保持原样: {self.total_clip_dim}D 直接进入 Transformer")
+            self.feature_compressor = nn.Identity() # 占位符，不改变任何特征和维度
+            transformer_input_dim = self.total_clip_dim
+            default_hidden_dims = [1024, 512, 256, 128] # 恢复原版的大回归头
+
+        # ==========================================================
+        # 接下来，所有的组件都使用动态算出来的 `transformer_input_dim`
+        # ==========================================================
+        print("Initializing Transformer Encoder for Temporal Modeling...")
+        
+        # 1. 位置编码的维度根据开关动态变化
+        self.pos_encoder = PositionalEncoding(d_model=transformer_input_dim, max_len=150)
+        
+        num_heads = self.config.get('transformer_heads', 4)       
+        num_layers = self.config.get('transformer_layers', 1)     
+        dim_feedforward = self.config.get('transformer_ffn', 512)
+        dropout = self.config.get('transformer_dropout', 0.3)     
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=transformer_input_dim,   # 👈 动态变化维度
+            nhead=num_heads, 
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True                   
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        self.fusion_regressor = BoundedFusionRegressorMultiClip(
+            input_dim=transformer_input_dim, # 👈 回归头的输入也动态变化
+            hidden_dims=self.config.get('regressor_hidden_dims', default_hidden_dims),
+            dropout_rate=self.config.get('regressor_dropout', 0.5)
+        )
+
 
         print(f"Fusion Regressor initialized with {self.expected_clips} clips")
         print(f"  Input dimension: {self.expected_clips * self.total_clip_dim}")
@@ -271,8 +326,14 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
         '''
         # === 🌟 核心修改点：Transformer 序列交互 ===
         # 4.1 注入位置编码 (让模型知道每个 clip 的时间先后顺序)
-        fused_per_clip_pe = self.pos_encoder(fused_per_clip)
+        #fused_per_clip_pe = self.pos_encoder(fused_per_clip)
+        # 🌟 送入位置编码和 Transformer 之前，先过一遍压缩器
+        # 如果 use_bottleneck 为 True，这里会把 1152维 压缩成 128维
+        # 如果 use_bottleneck 为 False，feature_compressor 是 nn.Identity，原样输出 1152维
+        fused_compressed = self.feature_compressor(fused_per_clip)
         
+        # 4.1 注入位置编码 
+        fused_per_clip_pe = self.pos_encoder(fused_compressed)
         # 4.2 经过 Transformer，进行全局 Self-Attention
         # 每个 clip 会去“观察”其他所有的 clip，寻找关键的动作或失误
         # trans_out 形状仍然是 (B, num_clips, 1536)，但包含了全局上下文

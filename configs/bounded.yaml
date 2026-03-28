@@ -13,11 +13,12 @@
 # DATA SETTINGS
 # ============================================================================
 data_root: /root/autodl-tmp/SV_test/data/heichole-calot  # JIGSAWS 数据集根目录
-batch_size: 5
+batch_size: 6
 val_batch_size: 3         # 验证集的 Batch Size（不计算梯度，可以设大点）
 test_batch_size: 6        # 测试集的 Batch Size
 num_workers: 4
 num_folds: 4
+skip_val: true   # true 表示不划分那 3 个视频作为验证集，直接用测试集保存 best_model
 #split_ratio: [0.7, 0.15, 0.15]  # 新增：70%训练，15%验证，15%测试
 split_seed: 42
 
@@ -67,8 +68,8 @@ use_mixed_conv: false
 # BOUNDED REGRESSION SETTINGS
 # ============================================================================
 use_bounded_regression: true   # 使用有界回归器（推荐）
-regressor_hidden_dims: [512,256]  # 隐藏层维度
-regressor_dropout: 0.4
+regressor_hidden_dims: [128,64]  # 隐藏层维度
+regressor_dropout: 0.3
 # ============================================================================
 # TRAINING SETTINGS
 # ============================================================================
@@ -135,7 +136,9 @@ transformer_heads: 4        # 注意力头数 (推荐 8)
 transformer_layers: 1       # Transformer 层数 (层数太多可能过拟合，推荐 1~3 层)
 transformer_ffn: 512       # 前馈网络隐藏层维度
 transformer_dropout: 0.3    # 防止过拟合的 Dropout
-
+# ====== 降维瓶颈层开关 ======
+use_bottleneck: true      # true: 开启降维瓶颈层；false: 保持 1152 维原样进入 Transformer
+bottleneck_dim: 256       # 如果开启瓶颈层，目标压缩维度是多少
 
 
 use_warmup: false

@@ -68,6 +68,9 @@ def parse_args():
     parser.add_argument('--save_freq', type=int, default=None)
     # 在 parse_args 里面添加
     parser.add_argument('--accumulation_steps', type=int, default=1, help='梯度累加步数')
+    parser.add_argument('--skip_val', action='store_true', default=None, help='跳过独立验证集，直接使用测试集验证')
+    parser.add_argument('--use_bottleneck', action='store_true', default=None, help='是否在送入Transformer前进行降维')
+    parser.add_argument('--bottleneck_dim', type=int, default=None, help='瓶颈层的目标维度')
     return parser.parse_args()
 
 
@@ -598,7 +601,7 @@ def main():
             
             print(f"✅ 成功恢复！将从 Epoch {start_epoch} 继续训练 Fold {current_fold}。历史最佳 Val Spearman: {best_val_spearman:.4f}")
         # ==========================================================
-
+        skip_val = config.get('skip_val', False)
         # 2. 获取当前折的数据集
         train_loader = create_dataloader_with_split(
             data_root=config['data_root'],
@@ -614,9 +617,10 @@ def main():
             current_fold=current_fold,    # 👈 传入当前折的索引
             split_seed=config.get('split_seed', 42),
             is_train=True,
-            use_mask=use_mask
+            use_mask=use_mask,
+            skip_val=skip_val  # 🌟 传给 DataLoader，让训练集吃掉验证集
         )
-
+        '''
         val_loader = create_dataloader_with_split(
             data_root=config['data_root'],
             #batch_size=config['batch_size'],
@@ -634,7 +638,7 @@ def main():
             is_train=False,
             use_mask=use_mask
         )
-        
+        '''
         test_loader = create_dataloader_with_split(
             data_root=config['data_root'],
             #batch_size=config['batch_size'],
@@ -652,6 +656,31 @@ def main():
             is_train=False,
             use_mask=use_mask
         )
+        # 3. 🌟 新增逻辑：可选择的验证集策略
+        skip_val = config.get('skip_val', False)
+        
+        if skip_val:
+            print(f"⚠️ [Fold {current_fold}] 开启【跳过独立验证集】模式：直接使用 Test Set 评估以保存 Best Model！")
+            val_loader = test_loader  # 直接把测试集的指针赋给 val_loader
+        else:
+            print(f"✅ [Fold {current_fold}] 标准模式：创建独立的 Validation Set。")
+            val_loader = create_dataloader_with_split(
+                data_root=config['data_root'],
+                batch_size=config.get('val_batch_size', config['batch_size']),
+                num_workers=config['num_workers'],
+                spatial_size=config.get('spatial_size', 112),
+                clip_length=config['clip_length'],
+                clip_stride=config['clip_stride'],
+                score_min=config['score_min'],
+                score_max=config['score_max'],# ... (保持你原本传的参数不变)
+                subset='val',
+                num_folds=num_folds,
+                current_fold=current_fold,
+                split_seed=config.get('split_seed', 42),
+                is_train=False,
+                use_mask=use_mask,
+                skip_val=skip_val
+            )
 
         #best_val_spearman = -float('inf')
         #best_test_spearman_for_this_fold = 0.0
@@ -664,8 +693,12 @@ def main():
             # 将当前折的日志写入 tensorboard
             fold_writer.add_scalar('train/loss', train_loss, epoch)
             fold_writer.add_scalar('train/spearman', train_metrics['spearman'], epoch)
-            fold_writer.add_scalar('val/loss', val_loss, epoch)
-            fold_writer.add_scalar('val/spearman', val_metrics['spearman'], epoch)
+            # 可选的美化修改（在 main 函数的循环里）
+            prefix = 'test' if skip_val else 'val'
+            fold_writer.add_scalar(f'{prefix}/loss', val_loss, epoch)
+            fold_writer.add_scalar(f'{prefix}/spearman', val_metrics['spearman'], epoch)
+            #fold_writer.add_scalar('val/loss', val_loss, epoch)
+            #fold_writer.add_scalar('val/spearman', val_metrics['spearman'], epoch)
             # ==========================================================
             # 🌟 【新增：修复 save_freq 不执行的问题】
             # 注意文件名加上了 fold_{current_fold}，防止不同折互相覆盖！

@@ -74,7 +74,8 @@ class VideoLevelDatasetFrames(Dataset):
                  # Other parameters
                  spatial_size=224,
                  normalize=True,
-                 use_mask=True,
+                 use_mask=False,
+                 skip_val=False,
                  min_video_length=50,
                  clip_length=16,                           # For compatibility (not used in frames loader)
                  clip_stride=10,                           # For compatibility (not used in frames loader)
@@ -136,7 +137,7 @@ class VideoLevelDatasetFrames(Dataset):
         self.target_max = target_max
 
         self.is_train = is_train
-
+        self.skip_val = skip_val
         # Load all video IDs and annotations
         print("\n" + "="*70)
         print("Initializing VideoLevelDatasetFrames")
@@ -244,10 +245,18 @@ class VideoLevelDatasetFrames(Dataset):
             remaining_ids = [vid for vid in shuffled_ids if vid not in test_ids]
             
             # 从剩余的样本中划出 15% 做验证集，其余做训练集
-            val_size = max(1, int(len(remaining_ids) * 0.15 + 1)) #####################################
-            val_ids = remaining_ids[:val_size]
-            train_ids = remaining_ids[val_size:]
-            
+            #val_size = max(1, int(len(remaining_ids) * 0.15 + 1)) #####################################
+            #val_ids = remaining_ids[:val_size]
+            #train_ids = remaining_ids[val_size:]
+            # 从剩余的样本中划出 15% 做验证集，其余做训练集
+            if getattr(self, 'skip_val', False):
+                val_ids = []  # 验证集置空
+                train_ids = remaining_ids  # 🌟 训练集吃掉所有剩余视频！
+            else:
+                val_size = max(1, int(len(remaining_ids) * 0.15 + 1)) #####################################
+                val_ids = remaining_ids[:val_size]
+                train_ids = remaining_ids[val_size:]
+
             print(f"K-Fold {self.current_fold+1}/{self.num_folds} Data split:")
             print(f"  Train: {len(train_ids)} videos")
             print(f"  Val:   {len(val_ids)} videos")
@@ -535,6 +544,7 @@ def create_dataloader_with_split(data_root,
                               num_folds=None,    # 👈 1. 接收参数
                               current_fold=0,    # 👈 2. 接收参数
                               is_train=True,
+                              skip_val=False,
                               **kwargs):
     """
     Factory function to create dataloader with proper data splitting.
@@ -570,8 +580,10 @@ def create_dataloader_with_split(data_root,
         split_seed=split_seed,
         num_folds=num_folds,          # 👈 3. 传给 Dataset
         current_fold=current_fold,    # 👈 4. 传给 Dataset
+        skip_val=skip_val,            # 🌟 传给 Dataset
         spatial_size=spatial_size,
         is_train=is_train,
+        skip_val=skip_val,
         **kwargs
     )
 
