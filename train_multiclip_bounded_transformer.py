@@ -24,6 +24,8 @@ import random
 import numpy as np
 from datetime import datetime
 from torch.cuda.amp import autocast, GradScaler
+from torch.optim.lr_scheduler import LambdaLR, MultiStepLR
+import math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 #from models.surgical_qa_model_multiclip_bounded import SurgicalQAModelMultiClipBounded, build_model_multiclip_bounded
@@ -64,7 +66,10 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--print_freq', type=int, default=None)
     parser.add_argument('--save_freq', type=int, default=None)
+    # 在 parse_args 里面添加
+    parser.add_argument('--accumulation_steps', type=int, default=1, help='梯度累加步数')
     return parser.parse_args()
+
 
 
 def load_config(config_path, args):
@@ -187,7 +192,7 @@ def build_optimizer(model, config):
 
     #==============================================================
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
-
+'''
 def build_scheduler(optimizer, config):
     sched_type = config.get('lr_scheduler', 'cosine')
     if sched_type == 'cosine':
@@ -198,18 +203,53 @@ def build_scheduler(optimizer, config):
                            gamma=config.get('lr_gamma', 0.1))
     return None
 #===============================================================================
+'''
+def build_scheduler(optimizer, config):
+    sched_type = config.get('lr_scheduler', 'cosine')
+    total_epochs = config.get('epochs', 100)
+    
+    # 获取 warmup 参数，默认开启，预热 5 个 epoch
+    use_warmup = config.get('use_warmup', True)
+    warmup_epochs = config.get('warmup_epochs', 5) if use_warmup else 0
 
-
+    if sched_type == 'cosine':
+        def lr_lambda(epoch):
+            # 1. Warmup 阶段：线性爬升到 1.0
+            if epoch < warmup_epochs:
+                return float(epoch + 1) / float(max(1, warmup_epochs))
+            # 2. Cosine 衰减阶段
+            progress = float(epoch - warmup_epochs) / float(max(1, total_epochs - warmup_epochs))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+            
+        return LambdaLR(optimizer, lr_lambda)
+        
+    elif sched_type == 'step':
+        # Step LR 这里就不做 warmup 了，为了简单，或者你可以自己套用 LambdaLR
+        return MultiStepLR(optimizer, 
+                           milestones=config.get('lr_milestones', [30, 60, 90]), 
+                           gamma=config.get('lr_gamma', 0.1))
+    return None
 
 
 def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None):
     model.train()
+    #=====================================================================
+    def freeze_bn(m):
+        classname = m.__class__.__name__
+        if classname.find('BatchNorm') != -1:
+            m.eval()
+    model.apply(freeze_bn)
+    #=====================================================================
 
     loss_meter = AverageMeter()
     pred_scores = []
     gt_scores = []
 
     print_freq = config.get('print_freq', 10)
+    # 获取累加步数，默认为1（即不累加）
+    accumulation_steps = config.get('accumulation_steps', 1)
+    optimizer.zero_grad()
+
 
     for batch_idx, batch in enumerate(dataloader):
         video = batch['video'].to(device)
@@ -226,26 +266,36 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
         #optimizer.zero_grad()
         #loss.backward()
         #optimizer.step()
-        optimizer.zero_grad()
+        #optimizer.zero_grad()
         
         if scaler is not None:
             # 🌟 开启混合精度：让模型在 float16 (半精度) 下跑，显存砍半！
             with autocast():
                 score_pred = model(video, masks)
                 loss, loss_dict = model.compute_loss(score_pred, score_gt)
-            
+                loss = loss / accumulation_steps
             # 混合精度专用的反向传播
             scaler.scale(loss).backward()
+            '''
             scaler.step(optimizer)
             scaler.update()
+            '''
+            if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(dataloader)):
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
         else:
             # 正常的 float32 全精度跑法
             score_pred = model(video, masks)
             loss, loss_dict = model.compute_loss(score_pred, score_gt)
-            loss.backward()
-            optimizer.step()
+            loss = loss / accumulation_steps
+            if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(dataloader)):
+                optimizer.step()
+                optimizer.zero_grad()
+            #loss.backward()
+            #optimizer.step()
 
-        loss_meter.update(loss.item(), batch_size)
+        loss_meter.update(loss.item() * accumulation_steps, batch_size)
         pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
         gt_scores.extend(score_gt.detach().cpu().numpy())
 

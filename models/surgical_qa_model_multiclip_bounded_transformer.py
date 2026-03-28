@@ -360,7 +360,7 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
             score_target = (score_normalized - norm_min) / norm_range * target_range + target_min
 
         return score_target
-
+    '''
     def compute_loss(self, score_pred, score_gt):
         """
         Compute total loss for training.
@@ -386,7 +386,78 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
         }
 
         return score_loss, loss_dict
+    '''
+    def compute_loss(self, score_pred, score_gt):
+        """
+        Compute total loss for training.
+        支持通过 config 切换 MSE 或 Smooth L1 + Ranking Loss
+        """
+        # 从 config 中读取 loss_type，默认使用更好的 'smooth_l1_rank'
+        loss_type = self.config.get('loss_type', 'smooth_l1_rank')
+        
+        # 展平为 1D Tensor: (B,)，防止广播机制出错
+        score_pred_flat = score_pred.view(-1)
+        score_gt_flat = score_gt.view(-1)
 
+        loss_dict = {}
+
+        # ==========================================
+        # 选项 A：传统的纯 MSE Loss (你原来的方案)
+        # ==========================================
+        if loss_type == 'mse':
+            score_loss = F.mse_loss(score_pred_flat, score_gt_flat)
+            total_loss = score_loss
+            loss_dict = {
+                'total_loss': total_loss.item(),
+                'score_loss': score_loss.item()
+            }
+
+        # ==========================================
+        # 选项 B：Smooth L1 + Ranking Loss (新改进方案)
+        # ==========================================
+        elif loss_type == 'smooth_l1_rank':
+            # 1. 基础回归损失 Smooth L1 (读取超参数，默认 beta=0.1)
+            beta = self.config.get('smooth_l1_beta', 0.1)
+            reg_loss = F.smooth_l1_loss(score_pred_flat, score_gt_flat, beta=beta)
+
+            # 2. 排序损失 Pairwise Ranking
+            batch_size = score_pred_flat.size(0)
+            rank_loss = torch.tensor(0.0, device=score_pred.device)
+
+            if batch_size > 1:
+                pred_i = score_pred_flat.unsqueeze(1).expand(batch_size, batch_size)
+                pred_j = score_pred_flat.unsqueeze(0).expand(batch_size, batch_size)
+                
+                gt_i = score_gt_flat.unsqueeze(1).expand(batch_size, batch_size)
+                gt_j = score_gt_flat.unsqueeze(0).expand(batch_size, batch_size)
+
+                mask = gt_i > gt_j
+
+                if mask.sum() > 0:
+                    target = torch.ones_like(pred_i[mask])
+                    # 读取 margin 超参数，默认 0.05
+                    margin = self.config.get('rank_margin', 0.05)
+                    rank_loss = F.margin_ranking_loss(
+                        pred_i[mask], 
+                        pred_j[mask], 
+                        target, 
+                        margin=margin
+                    )
+
+            # 3. 组合 Loss (读取权重超参数，默认 0.5)
+            lambda_rank = self.config.get('lambda_rank', 0.5)
+            total_loss = reg_loss + lambda_rank * rank_loss
+
+            loss_dict = {
+                'total_loss': total_loss.item(),
+                'score_loss': reg_loss.item(),  
+                'rank_loss': rank_loss.item() if isinstance(rank_loss, torch.Tensor) else 0.0
+            }
+
+        else:
+            raise ValueError(f"未知的损失函数类型 (loss_type): {loss_type}")
+
+        return total_loss, loss_dict
     def unfreeze_backbone(self, layers_to_unfreeze=['all']):
         """
         Unfreeze backbone layers for fine-tuning.

@@ -14,6 +14,8 @@
 # ============================================================================
 data_root: /root/autodl-tmp/SV_test/data  # JIGSAWS 数据集根目录
 batch_size: 2
+val_batch_size: 6         # 验证集的 Batch Size（不计算梯度，可以设大点）
+test_batch_size: 12        # 测试集的 Batch Size
 num_workers: 4
 num_folds: 4
 #split_ratio: [0.7, 0.15, 0.15]  # 新增：70%训练，15%验证，15%测试
@@ -50,7 +52,7 @@ normalize: true       # 归一化像素值到 [-1, 1]
 # ============================================================================
 static_dim: 512        # ResNet-34 特征维度
 dynamic_dim: 1024      # I3D 特征维度（标准 Mixed_5c 输出）
-freeze_backbone: false   # 冻结主干网络
+freeze_backbone: true   # 冻结主干网络
 use_pretrained: true   # 使用 ImageNet 预训练权重
 #use_mask_loss: true   # 使用掩膜监督损失
 use_mask: false
@@ -81,7 +83,7 @@ lr_gamma: 0.1
 
 # 差分学习率（论文要求）
 backbone_lr: 0.00001     # I3D 主干网络学习率
-static_lr: 0.0002       # ResNet + 回归器学习率
+static_lr: 0.0001       # ResNet + 回归器学习率
 
 
 # ============================================================================
@@ -108,7 +110,7 @@ min_delta: 0.001      # 最小改进阈值
 # ============================================================================
 output_dir: ./output_muticlip_bounded
 print_freq: 2        # 每 N 步打印一次
-save_freq: 50          # 每 N 轮保存一次检查点
+save_freq: 25          # 每 N 轮保存一次检查点
 log_freq: 10          # 每 N 步记录一次 Tensor
 
 # ============================================================================
@@ -131,3 +133,19 @@ transformer_heads: 8        # 注意力头数 (推荐 8)
 transformer_layers: 1       # Transformer 层数 (层数太多可能过拟合，推荐 1~3 层)
 transformer_ffn: 2048       # 前馈网络隐藏层维度
 transformer_dropout: 0.3    # 防止过拟合的 Dropout
+
+
+
+use_warmup: true
+warmup_epochs: 5
+accumulation_steps: 5
+# ============================================================================
+# LOSS SETTINGS
+# ============================================================================
+# 可选项: 'mse' 或 'smooth_l1_rank'
+loss_type: 'smooth_l1_rank'
+
+# 如果使用 smooth_l1_rank，可以调节以下超参数：
+smooth_l1_beta: 0.1    # Smooth L1 的平滑阈值
+rank_margin: 0.05      # 排序损失的边距 (0.05 对应 24分满分里的 1.2 分差距)
+lambda_rank: 0.5       # 排序损失在总 Loss 中的权重比例
