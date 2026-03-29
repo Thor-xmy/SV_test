@@ -151,7 +151,6 @@ use_mean_penalty: true            # 第二级：是否开启分布锚点 (对齐
 use_dynamic_weights: true         # 第三级：是否让网络自己学习权重！
                                   # (设为 true 时，下面的 lambda_rank 和 lambda_mean 会被自动无视)
                                   # (设为 false 时，采用下面你手动设定的固定权重)
-
 lambda_rank: 2.0                  # 手动设定的排序 Loss 权重
 lambda_mean: 1.0                  # 手动设定的分布锚点 Loss 权重
 rank_margin: 0.05                 # 排序损失的安全边距
