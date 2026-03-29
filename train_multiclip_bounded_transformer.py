@@ -130,6 +130,42 @@ def setup_device(gpu_id):
         print("Using CPU")
     return device
 
+
+def print_trainable_parameters(model):
+    """
+    打印模型中所有参与训练的层和参数量统计
+    """
+    print("\n" + "="*80)
+    print("🚀 模 型 参 数 体 检 报 告 (Trainable Parameters Summary)")
+    print("="*80)
+    
+    total_params = 0
+    trainable_params = 0
+    
+    print(f"{'Layer Name':<55} | {'Shape':<18} | {'Params':<10}")
+    print("-" * 85)
+    
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        
+        # 只打印参与训练的层 (requires_grad == True)
+        if param.requires_grad:
+            trainable_params += num_params
+            # 将 shape 转换为紧凑的字符串，如 [64, 128, 3, 3]
+            shape_str = str(list(param.shape))
+            print(f"{name:<55} | {shape_str:<18} | {num_params:<10,}")
+            
+    print("-" * 85)
+    print(f"🧊 总参数量 (Total Parameters)       : {total_params:>15,}")
+    print(f"🔥 参与训练参数 (Trainable Params)   : {trainable_params:>15,}")
+    
+    percentage = 100 * trainable_params / total_params if total_params > 0 else 0
+    print(f"📊 可训练参数比例 (Trainable Ratio)  : {percentage:>14.2f}%")
+    print("="*80 + "\n")
+
+
+
 # 这里的双学习率代码你已经加得很完美了，完全保留
 '''
 def build_optimizer(model, config):
@@ -246,6 +282,7 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
     #=====================================================================
 
     loss_meter = AverageMeter()
+    grad_norm_meter = AverageMeter()  # 🌟 新增：梯度长度记录仪
     pred_scores = []
     gt_scores = []
 
@@ -285,6 +322,12 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
             scaler.update()
             '''
             if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(dataloader)):
+                scaler.unscale_(optimizer)
+                clip_norm = config.get('clip_grad_norm', 1.0)
+                if clip_norm > 0:
+                    # 🌟 核心魔法：它会返回【裁剪前】的真实原始梯度长度！
+                    total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
+                    grad_norm_meter.update(total_norm.item(), 1) # 记录下来
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -295,6 +338,12 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
             loss = loss / accumulation_steps
             loss.backward()
             if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(dataloader)):
+                clip_norm = config.get('clip_grad_norm', 1.0)
+                if clip_norm > 0:
+                    # 🌟 同理，全精度模式下也记录
+                    total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
+                    grad_norm_meter.update(total_norm.item(), 1)
+                    
                 optimizer.step()
                 optimizer.zero_grad()
             
@@ -323,6 +372,7 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
     # 3. 计算具有真实对比意义的 Metrics
     #metrics = compute_metrics(pred_scores, gt_scores)
     metrics = compute_metrics(pred_scores_real, gt_scores_real)
+    metrics['grad_norm'] = grad_norm_meter.avg  # 🌟 将梯度长度打包
     return loss_meter.avg, metrics
 
 
@@ -576,6 +626,9 @@ def main():
 
         # 1. 每一折必须重新初始化一个全新的模型！绝对不能让模型携带上一折的记忆！
         model = SurgicalQAModelMultiClipBounded(config).to(device)
+        # 🌟 新增：只在第一折（或只跑单折）时打印一次参数报告，防止控制台刷屏
+        if current_fold == folds_to_run[0]:
+            print_trainable_parameters(model)
         optimizer = build_optimizer(model, config)
         scheduler = build_scheduler(optimizer, config)
         
@@ -584,7 +637,9 @@ def main():
 
         # ================== 🌟 新增：断点续训逻辑 ==================
         start_epoch = 0
+        
         best_val_spearman = -float('inf')
+        best_val_loss_for_tie = float('inf') # 🌟 新增：记录最高分对应的最低 Loss，初始化为正无穷大 (infinity)
         best_test_spearman_for_this_fold = 0.0
 
         if args.resume is not None:
@@ -693,6 +748,7 @@ def main():
             # 将当前折的日志写入 tensorboard
             fold_writer.add_scalar('train/loss', train_loss, epoch)
             fold_writer.add_scalar('train/spearman', train_metrics['spearman'], epoch)
+            fold_writer.add_scalar('train/grad_norm', train_metrics['grad_norm'], epoch) # 🌟 画出真实的梯度长度！
             # 可选的美化修改（在 main 函数的循环里）
             prefix = 'test' if skip_val else 'val'
             fold_writer.add_scalar(f'{prefix}/loss', val_loss, epoch)
@@ -709,12 +765,18 @@ def main():
                 )
             # ==========================================================
             # 保存当前折的最佳模型，并用它在测试集上跑一次最终成绩
-            if val_metrics['spearman'] > best_val_spearman:
+            # 改进的保存逻辑：Spearman 更高，或者 Spearman 相同但 Loss 更低
+            if val_metrics['spearman'] > best_val_spearman or \
+               (val_metrics['spearman'] == best_val_spearman and val_loss < best_val_loss_for_tie):
+                
                 best_val_spearman = val_metrics['spearman']
+                best_val_loss_for_tie = val_loss  # 记录当前最小 Loss
+                
                 save_checkpoint(
                     model, optimizer, epoch + 1, val_loss, val_metrics,
-                    log_dir, f'best_model_fold_{current_fold}.pth'  # 👈 命名包含 fold 编号，防止覆盖
+                    log_dir, f'best_model_fold_{current_fold}.pth'
                 )
+                print(f"--> [Fold {current_fold}] 🌟 保存新 Best Model! (Spearman: {best_val_spearman:.4f}, Loss: {val_loss:.4f})")
                 
                 # 🌟 当验证集达到最好时，立刻在测试集上跑一次真实分数
                 print(f"--> [Fold {current_fold}] 验证集提升，在测试集上评估...")

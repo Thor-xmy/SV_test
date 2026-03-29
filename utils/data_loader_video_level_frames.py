@@ -583,7 +583,6 @@ def create_dataloader_with_split(data_root,
         skip_val=skip_val,            # 🌟 传给 Dataset
         spatial_size=spatial_size,
         is_train=is_train,
-        skip_val=skip_val,
         **kwargs
     )
 
