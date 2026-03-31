@@ -229,12 +229,27 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
             batch_first=True                   
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        # ====== 🌟 新增：提取输出维度配置 ======
+        self.use_sub_scores = self.config.get('use_sub_scores', False)
+        self.num_sub_scores = self.config.get('num_sub_scores', 5)
+        out_dim = self.num_sub_scores if self.use_sub_scores else 1
 
+        self.fusion_regressor = BoundedFusionRegressorMultiClip(
+            input_dim=transformer_input_dim, # 👈 回归头的输入也动态变化
+            hidden_dims=self.config.get('regressor_hidden_dims', default_hidden_dims),
+            dropout_rate=self.config.get('regressor_dropout', 0.5),
+            out_dim=out_dim  # 🌟 将动态分支数传递给底层回归器
+        )
+        
+        
+        
+        '''
         self.fusion_regressor = BoundedFusionRegressorMultiClip(
             input_dim=transformer_input_dim, # 👈 回归头的输入也动态变化
             hidden_dims=self.config.get('regressor_hidden_dims', default_hidden_dims),
             dropout_rate=self.config.get('regressor_dropout', 0.5)
         )
+        '''
         '''
         # ====== 🌟 新增：动态权重与分布锚点注册 ======
         self.use_mean_penalty = self.config.get('use_mean_penalty', False)
@@ -461,9 +476,311 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
             score_target = (score_normalized - norm_min) / norm_range * target_range + target_min
 
         return score_target
+
+    def compute_loss(self, score_pred, score_gt, sub_score_gt=None):
+        """
+        高度可配置的计算 Loss 函数 (Tie-Loss 终极版) - 增强支持多分支：
+        支持：分数(Score) + 排序(Rank) + 锚点(Mean) + 同分聚合(Tie)
+        """
+        score_loss_type = self.config.get('score_loss_type', 'mae').lower()
+        use_sub_scores = self.config.get('use_sub_scores', False)
+
+        # ==========================================
+        # 模块 A：计算 MAE Loss 与总分降维
+        # ==========================================
+        if use_sub_scores and sub_score_gt is not None:
+            # 🌟 多分支模式：对 N 个子项分别计算误差
+            if score_loss_type == 'mse':
+                score_loss = F.mse_loss(score_pred, sub_score_gt)
+            elif score_loss_type == 'mae':
+                score_loss = F.l1_loss(score_pred, sub_score_gt)
+            else:
+                raise ValueError(f"未知的 score_loss_type: {score_loss_type}")
+                
+            # 🌟 将多分支的预测值沿特征维度求均值，还原出“归一化的预测总分”，供后续排序使用
+            pred_total_norm = score_pred.mean(dim=-1)
+        else:
+            # 🌟 单分支原始模式
+            score_pred_flat = score_pred.view(-1)
+            score_gt_flat = score_gt.view(-1)
+            if score_loss_type == 'mse':
+                score_loss = F.mse_loss(score_pred_flat, score_gt_flat)
+            elif score_loss_type == 'mae':
+                score_loss = F.l1_loss(score_pred_flat, score_gt_flat)
+            else:
+                raise ValueError(f"未知的 score_loss_type: {score_loss_type}")
+                
+            pred_total_norm = score_pred_flat
+
+        loss_type = self.config.get('loss_type', 'score_plus_rank').lower()
+
+        if loss_type == 'score_only':
+            loss_dict = {
+                'total_loss': score_loss.item(), 'score_loss': score_loss.item(),
+                'rank_loss': 0.0, 'mean_loss': 0.0, 'tie_loss': 0.0
+            }
+            return score_loss, loss_dict
+
+        # ==========================================
+        # 模块 B：组合模式 (利用降维后的 pred_total_norm 算后续所有 Loss)
+        # ==========================================
+        elif loss_type == 'score_plus_rank':
+            # 展平真值总分
+            score_gt_flat = score_gt.view(-1)
+            batch_size = pred_total_norm.size(0)
+            
+            rank_loss = torch.tensor(0.0, device=score_pred.device)
+            tie_loss = torch.tensor(0.0, device=score_pred.device)
+            use_tie_loss = self.config.get('use_tie_loss', False)
+
+            if batch_size > 1:
+                pred_i = pred_total_norm.unsqueeze(1).expand(batch_size, batch_size)
+                pred_j = pred_total_norm.unsqueeze(0).expand(batch_size, batch_size)
+                gt_i = score_gt_flat.unsqueeze(1).expand(batch_size, batch_size)
+                gt_j = score_gt_flat.unsqueeze(0).expand(batch_size, batch_size)
+                
+                # --- 1.1 排斥力 (Ranking Loss) ---
+                mask_diff = gt_i > gt_j
+                if mask_diff.sum() > 0:
+                    use_dynamic_margin = self.config.get('use_dynamic_margin', True)
+                    
+                    if use_dynamic_margin:
+                        margin_scale = self.config.get('margin_scale', 1.0)
+                        dynamic_margin = (gt_i[mask_diff] - gt_j[mask_diff]) * margin_scale
+                        rank_loss = F.relu(-(pred_i[mask_diff] - pred_j[mask_diff]) + dynamic_margin).mean()
+                    else:
+                        target = torch.ones_like(pred_i[mask_diff])
+                        margin = self.config.get('rank_margin', 0.05)
+                        rank_loss = F.margin_ranking_loss(
+                            pred_i[mask_diff], pred_j[mask_diff], target, margin=margin
+                        )
+
+                # --- 1.2 吸引力 (Tie Loss) ---
+                if use_tie_loss:
+                    eye_mask = torch.eye(batch_size, dtype=torch.bool, device=score_pred.device)
+                    mask_tie = (gt_i == gt_j) & (~eye_mask)
+                    
+                    if mask_tie.sum() > 0:
+                        tie_loss = F.mse_loss(pred_i[mask_tie], pred_j[mask_tie])
+
+            # --- 2. 计算分布锚点 Loss (Mean Loss) ---
+            use_mean_penalty = self.config.get('use_mean_penalty', False)
+            mean_loss = torch.tensor(0.0, device=score_pred.device)
+            if use_mean_penalty:
+                mean_loss = F.l1_loss(pred_total_norm.mean(), score_gt_flat.mean())
+
+            # --- 3. 终极融合：动态 vs 手动 ---
+            use_dynamic_weights = self.config.get('use_dynamic_weights', False)
+            
+            if use_dynamic_weights:
+                idx_score = self.loss_indices['score']
+                precision_score = torch.exp(-self.log_vars[idx_score])
+                loss_score_weighted = precision_score * score_loss + self.log_vars[idx_score]
+                
+                idx_rank = self.loss_indices['rank']
+                if isinstance(rank_loss, torch.Tensor) and rank_loss.requires_grad:
+                    precision_rank = torch.exp(-self.log_vars[idx_rank])
+                    loss_rank_weighted = precision_rank * rank_loss + self.log_vars[idx_rank]
+                else:
+                    loss_rank_weighted = 0.0
+                
+                if use_mean_penalty:
+                    idx_mean = self.loss_indices['mean']
+                    precision_mean = torch.exp(-self.log_vars[idx_mean])
+                    loss_mean_weighted = precision_mean * mean_loss + self.log_vars[idx_mean]
+                else:
+                    loss_mean_weighted = 0.0
+
+                if use_tie_loss:
+                    idx_tie = self.loss_indices['tie']
+                    if isinstance(tie_loss, torch.Tensor) and tie_loss.requires_grad:
+                        precision_tie = torch.exp(-self.log_vars[idx_tie])
+                        loss_tie_weighted = precision_tie * tie_loss + self.log_vars[idx_tie]
+                    else:
+                        loss_tie_weighted = 0.0
+                else:
+                    loss_tie_weighted = 0.0
+                    
+                total_loss = loss_score_weighted + loss_rank_weighted + loss_mean_weighted + loss_tie_weighted
+                
+            else:
+                lambda_rank = self.config.get('lambda_rank', 1.0)
+                lambda_mean = self.config.get('lambda_mean', 1.0) if use_mean_penalty else 0.0
+                lambda_tie = self.config.get('lambda_tie', 1.0) if use_tie_loss else 0.0
+                
+                total_loss = score_loss + (lambda_rank * rank_loss) + (lambda_mean * mean_loss) + (lambda_tie * tie_loss)
+
+            # --- 4. 日志输出 ---
+            loss_dict = {
+                'total_loss': total_loss.item(), 'score_loss': score_loss.item(),  
+                'rank_loss': rank_loss.item() if isinstance(rank_loss, torch.Tensor) else 0.0,
+                'mean_loss': mean_loss.item() if isinstance(mean_loss, torch.Tensor) else 0.0,
+                'tie_loss': tie_loss.item() if isinstance(tie_loss, torch.Tensor) else 0.0
+            }
+            
+            if use_dynamic_weights:
+                loss_dict['weight_score'] = torch.exp(-self.log_vars[self.loss_indices['score']]).item()
+                loss_dict['weight_rank']  = torch.exp(-self.log_vars[self.loss_indices['rank']]).item()
+                if use_mean_penalty:
+                    loss_dict['weight_mean'] = torch.exp(-self.log_vars[self.loss_indices['mean']]).item()
+                if use_tie_loss:
+                    loss_dict['weight_tie'] = torch.exp(-self.log_vars[self.loss_indices['tie']]).item()
+
+            return total_loss, loss_dict
+
+        else:
+            raise ValueError(f"未知的总 loss_type: {loss_type}")
+
+    '''
+    def compute_loss(self, score_pred, score_gt, sub_score_gt=None):
+        """
+        高度可配置的计算 Loss 函数：
+        score_pred: 形状 (Batch, out_dim)。多分支时 out_dim=5，单分支时 out_dim=1
+        score_gt: 形状 (Batch,)，总分的真实归一化值
+        sub_score_gt: 形状 (Batch, 5)，子项分数的真实归一化值（多分支时有效）
+        """
+        score_loss_type = self.config.get('score_loss_type', 'mae').lower()
+        use_sub_scores = self.config.get('use_sub_scores', False)
+
+        # ==========================================
+        # 模块 A：计算 MAE Loss 与总分降维
+        # ==========================================
+        if use_sub_scores and sub_score_gt is not None:
+            # 🌟 多分支模式：对 N 个子项分别计算 MAE 误差
+            if score_loss_type == 'mse':
+                score_loss = F.mse_loss(score_pred, sub_score_gt)
+            elif score_loss_type == 'mae':
+                score_loss = F.l1_loss(score_pred, sub_score_gt)
+            else:
+                raise ValueError(f"未知的 score_loss_type: {score_loss_type}")
+                
+            # 🌟 将多分支的预测值沿最后一个维度求均值，还原出“归一化的预测总分”
+            pred_total_norm = score_pred.mean(dim=-1)
+        else:
+            # 🌟 单分支模式：直接计算总分误差
+            score_pred_flat = score_pred.view(-1)
+            score_gt_flat = score_gt.view(-1)
+            if score_loss_type == 'mse':
+                score_loss = F.mse_loss(score_pred_flat, score_gt_flat)
+            elif score_loss_type == 'mae':
+                score_loss = F.l1_loss(score_pred_flat, score_gt_flat)
+            else:
+                raise ValueError(f"未知的 score_loss_type: {score_loss_type}")
+                
+            pred_total_norm = score_pred_flat
+
+        loss_type = self.config.get('loss_type', 'score_plus_rank').lower()
+
+        if loss_type == 'score_only':
+            loss_dict = {
+                'total_loss': score_loss.item(), 'score_loss': score_loss.item(),
+                'rank_loss': 0.0, 'mean_loss': 0.0, 'tie_loss': 0.0
+            }
+            return score_loss, loss_dict
+
+        # ==========================================
+        # 模块 B：组合模式 (分数 + 排序 + 锚点 + 同分聚合)
+        # ==========================================
+        elif loss_type == 'score_plus_rank':
+            # 🌟 注意：下面的所有排序和聚合，全部使用降维后的 pred_total_norm
+            score_gt_flat = score_gt.view(-1)
+            batch_size = pred_total_norm.size(0)
+            
+            rank_loss = torch.tensor(0.0, device=score_pred.device)
+            tie_loss = torch.tensor(0.0, device=score_pred.device)
+            use_tie_loss = self.config.get('use_tie_loss', False)
+
+            if batch_size > 1:
+                pred_i = pred_total_norm.unsqueeze(1).expand(batch_size, batch_size)
+                pred_j = pred_total_norm.unsqueeze(0).expand(batch_size, batch_size)
+                gt_i = score_gt_flat.unsqueeze(1).expand(batch_size, batch_size)
+                gt_j = score_gt_flat.unsqueeze(0).expand(batch_size, batch_size)
+                
+                # --- 1.1 排斥力 (Ranking Loss) ---
+                mask_diff = gt_i > gt_j
+                if mask_diff.sum() > 0:
+                    use_dynamic_margin = self.config.get('use_dynamic_margin', True)
+                    if use_dynamic_margin:
+                        margin_scale = self.config.get('margin_scale', 1.0)
+                        dynamic_margin = (gt_i[mask_diff] - gt_j[mask_diff]) * margin_scale
+                        rank_loss = F.relu(-(pred_i[mask_diff] - pred_j[mask_diff]) + dynamic_margin).mean()
+                    else:
+                        target = torch.ones_like(pred_i[mask_diff])
+                        margin = self.config.get('rank_margin', 0.05)
+                        rank_loss = F.margin_ranking_loss(
+                            pred_i[mask_diff], pred_j[mask_diff], target, margin=margin
+                        )
+
+                # --- 1.2 吸引力 (Tie Loss) ---
+                if use_tie_loss:
+                    eye_mask = torch.eye(batch_size, dtype=torch.bool, device=score_pred.device)
+                    mask_tie = (gt_i == gt_j) & (~eye_mask)
+                    if mask_tie.sum() > 0:
+                        tie_loss = F.mse_loss(pred_i[mask_tie], pred_j[mask_tie])
+
+            # --- 2. 计算分布锚点 Loss (Mean Loss) ---
+            use_mean_penalty = self.config.get('use_mean_penalty', False)
+            mean_loss = torch.tensor(0.0, device=score_pred.device)
+            if use_mean_penalty:
+                mean_loss = F.l1_loss(pred_total_norm.mean(), score_gt_flat.mean())
+
+            # --- 3. 终极融合 ---
+            use_dynamic_weights = self.config.get('use_dynamic_weights', False)
+            if use_dynamic_weights:
+                idx_score = self.loss_indices['score']
+                precision_score = torch.exp(-self.log_vars[idx_score])
+                loss_score_weighted = precision_score * score_loss + self.log_vars[idx_score]
+                
+                idx_rank = self.loss_indices['rank']
+                if isinstance(rank_loss, torch.Tensor) and rank_loss.requires_grad:
+                    precision_rank = torch.exp(-self.log_vars[idx_rank])
+                    loss_rank_weighted = precision_rank * rank_loss + self.log_vars[idx_rank]
+                else:
+                    loss_rank_weighted = 0.0
+                
+                if use_mean_penalty:
+                    idx_mean = self.loss_indices['mean']
+                    precision_mean = torch.exp(-self.log_vars[idx_mean])
+                    loss_mean_weighted = precision_mean * mean_loss + self.log_vars[idx_mean]
+                else:
+                    loss_mean_weighted = 0.0
+
+                if use_tie_loss:
+                    idx_tie = self.loss_indices['tie']
+                    if isinstance(tie_loss, torch.Tensor) and tie_loss.requires_grad:
+                        precision_tie = torch.exp(-self.log_vars[idx_tie])
+                        loss_tie_weighted = precision_tie * tie_loss + self.log_vars[idx_tie]
+                    else:
+                        loss_tie_weighted = 0.0
+                else:
+                    loss_tie_weighted = 0.0
+                    
+                total_loss = loss_score_weighted + loss_rank_weighted + loss_mean_weighted + loss_tie_weighted
+            else:
+                lambda_rank = self.config.get('lambda_rank', 1.0)
+                lambda_mean = self.config.get('lambda_mean', 1.0) if use_mean_penalty else 0.0
+                lambda_tie = self.config.get('lambda_tie', 1.0) if use_tie_loss else 0.0
+                total_loss = score_loss + (lambda_rank * rank_loss) + (lambda_mean * mean_loss) + (lambda_tie * tie_loss)
+
+            loss_dict = {
+                'total_loss': total_loss.item(), 'score_loss': score_loss.item(),  
+                'rank_loss': rank_loss.item() if isinstance(rank_loss, torch.Tensor) else 0.0,
+                'mean_loss': mean_loss.item() if isinstance(mean_loss, torch.Tensor) else 0.0,
+                'tie_loss': tie_loss.item() if isinstance(tie_loss, torch.Tensor) else 0.0
+            }
+            if use_dynamic_weights:
+                loss_dict['weight_score'] = torch.exp(-self.log_vars[self.loss_indices['score']]).item()
+                loss_dict['weight_rank']  = torch.exp(-self.log_vars[self.loss_indices['rank']]).item()
+                if use_mean_penalty:
+                    loss_dict['weight_mean'] = torch.exp(-self.log_vars[self.loss_indices['mean']]).item()
+                if use_tie_loss:
+                    loss_dict['weight_tie'] = torch.exp(-self.log_vars[self.loss_indices['tie']]).item()
+
+            return total_loss, loss_dict
+        else:
+            raise ValueError(f"未知的总 loss_type: {loss_type}")
     
-    
-    def compute_loss(self, score_pred, score_gt):
+    def compute_loss(self, score_pred, score_gt,sub_score_gt=None):
         """
         高度可配置的计算 Loss 函数 (Tie-Loss 终极版)：
         支持：分数(Score) + 排序(Rank) + 锚点(Mean) + 同分聚合(Tie)
@@ -613,7 +930,7 @@ class SurgicalQAModelMultiClipBounded(nn.Module):
 
         else:
             raise ValueError(f"未知的总 loss_type: {loss_type}")
-    '''
+    
     def compute_loss(self, score_pred, score_gt):
         """
         高度可配置的计算 Loss 函数 (终极版)：

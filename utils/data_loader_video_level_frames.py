@@ -86,6 +86,8 @@ class VideoLevelDatasetFrames(Dataset):
                  target_max=1.0,                        # Normalized target maximum
                  num_folds=None,
                  current_fold=0,
+                 sub_score_min=1.0, 
+                 sub_score_max=5.0,
                  is_train=True):
         """
         Args:
@@ -135,7 +137,8 @@ class VideoLevelDatasetFrames(Dataset):
         self.score_max = score_max
         self.target_min = target_min
         self.target_max = target_max
-
+        self.sub_score_min = sub_score_min  # 🌟 保存子项最小边界
+        self.sub_score_max = sub_score_max  # 🌟 保存子项最大边界
         self.is_train = is_train
         self.skip_val = skip_val
         # Load all video IDs and annotations
@@ -468,12 +471,17 @@ class VideoLevelDatasetFrames(Dataset):
             video_id_normalized = video_id.lower().replace('_', '-')
             
             if video_id_normalized in self.annotations:
-                original_score = self.annotations[video_id_normalized].get('score', 0)
+                #original_score = self.annotations[video_id_normalized].get('score', 0)
+                #normalized_score = self._normalize_score(original_score)
+                anno = self.annotations[video_id_normalized]
+                original_score = anno.get('score', 0)
                 normalized_score = self._normalize_score(original_score)
+                # 🌟 新增：读取子项分数
+                individual_scores = anno.get('individual_scores', [])
             else:
                 print(f"Warning: No score found for {video_id} (searched as: {video_id_normalized}), using 0")
                 normalized_score = 0.0
-
+                individual_scores = []
             # ==========================================
             # 🌟 新增：视频一致性数据增强 (Video-Consistent Augmentation)
             # ==========================================
@@ -512,6 +520,13 @@ class VideoLevelDatasetFrames(Dataset):
                 'video_id': video_id                                               # 这里依然返回原始 ID，方便后续查看
             }
 
+            # 🌟 新增：如果 JSON 中有小分，将其独立归一化并存入 sample
+            if len(individual_scores) > 0:
+                sub_range = self.sub_score_max - self.sub_score_min
+                sub_range = sub_range if sub_range > 0 else 1.0
+                norm_subs = [(s - self.sub_score_min) / sub_range for s in individual_scores]
+                sample['sub_scores'] = torch.tensor(norm_subs, dtype=torch.float32)
+            
             # 如果 mask_tensor 存在，才往字典里加 'masks' 键
             if mask_tensor is not None:
                 sample['masks'] = mask_tensor
@@ -545,6 +560,8 @@ def create_dataloader_with_split(data_root,
                               current_fold=0,    # 👈 2. 接收参数
                               is_train=True,
                               skip_val=False,
+                              sub_score_min=1.0,  # 🌟 接收外部传参
+                              sub_score_max=5.0,  # 🌟 接收外部传参
                               **kwargs):
     """
     Factory function to create dataloader with proper data splitting.
@@ -581,6 +598,8 @@ def create_dataloader_with_split(data_root,
         num_folds=num_folds,          # 👈 3. 传给 Dataset
         current_fold=current_fold,    # 👈 4. 传给 Dataset
         skip_val=skip_val,            # 🌟 传给 Dataset
+        sub_score_min=sub_score_min,  # 🌟 传给 Dataset
+        sub_score_max=sub_score_max,  # 🌟 传给 Dataset
         spatial_size=spatial_size,
         is_train=is_train,
         **kwargs

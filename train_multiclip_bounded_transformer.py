@@ -301,6 +301,11 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
 
         batch_size = video.size(0)
 
+        # 🌟 提取子项真值
+        sub_scores_gt = batch.get('sub_scores', None)
+        if sub_scores_gt is not None:
+            sub_scores_gt = sub_scores_gt.to(device)
+
         #score_pred = model(video, masks)
         #loss, loss_dict = model.compute_loss(score_pred, score_gt)
 
@@ -313,7 +318,7 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
             # 🌟 开启混合精度：让模型在 float16 (半精度) 下跑，显存砍半！
             with autocast():
                 score_pred = model(video, masks)
-                loss, loss_dict = model.compute_loss(score_pred, score_gt)
+                loss, loss_dict = model.compute_loss(score_pred, score_gt, sub_score_gt=sub_scores_gt)
                 loss = loss / accumulation_steps
             # 混合精度专用的反向传播
             scaler.scale(loss).backward()
@@ -334,7 +339,7 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
         else:
             # 正常的 float32 全精度跑法
             score_pred = model(video, masks)
-            loss, loss_dict = model.compute_loss(score_pred, score_gt)
+            loss, loss_dict = model.compute_loss(score_pred, score_gt, sub_score_gt=sub_scores_gt)
             loss = loss / accumulation_steps
             loss.backward()
             if ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(dataloader)):
@@ -350,7 +355,14 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
             #optimizer.step()
 
         loss_meter.update(loss.item() * accumulation_steps, batch_size)
-        pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
+        # 🌟 安全降维提取预测总分
+        if config.get('use_sub_scores', False):
+            pred_norm = score_pred.detach().mean(dim=-1).cpu().numpy()
+        else:
+            pred_norm = score_pred.detach().squeeze(-1).cpu().numpy()
+            
+        pred_scores.extend(pred_norm)
+        #pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
         gt_scores.extend(score_gt.detach().cpu().numpy())
 
         if (batch_idx + 1) % print_freq == 0:
@@ -400,12 +412,22 @@ def validate(model, dataloader, device, config):
             score_gt = batch['score'].to(device)
 
             batch_size = video.size(0)
+            sub_scores_gt = batch.get('sub_scores', None)
+            if sub_scores_gt is not None:
+                sub_scores_gt = sub_scores_gt.to(device)
 
             score_pred = model(video, masks)
-            loss, _ = model.compute_loss(score_pred, score_gt)
+            loss, _ = model.compute_loss(score_pred, score_gt, sub_score_gt=sub_scores_gt)
 
             loss_meter.update(loss.item(), batch_size)
-            pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
+            # 🌟 同样进行安全降维
+            if config.get('use_sub_scores', False):
+                pred_norm = score_pred.detach().mean(dim=-1).cpu().numpy()
+            else:
+                pred_norm = score_pred.detach().squeeze(-1).cpu().numpy()
+                
+            pred_scores.extend(pred_norm)
+            #pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
             gt_scores.extend(score_gt.detach().cpu().numpy())
 
     pred_scores = np.array(pred_scores)
@@ -689,6 +711,8 @@ def main():
             clip_stride=config['clip_stride'],
             score_min=config['score_min'],
             score_max=config['score_max'],
+            sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增参数透传
+            sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增参数透传
             subset='train',
             num_folds=num_folds,          # 👈 传入折数
             current_fold=current_fold,    # 👈 传入当前折的索引
@@ -726,6 +750,8 @@ def main():
             clip_stride=config['clip_stride'],
             score_min=config['score_min'],
             score_max=config['score_max'],
+            sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增参数透传
+            sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增参数透传
             subset='test',                # 👈 这一折的测试集
             num_folds=num_folds,
             current_fold=current_fold,
@@ -750,6 +776,8 @@ def main():
                 clip_stride=config['clip_stride'],
                 score_min=config['score_min'],
                 score_max=config['score_max'],# ... (保持你原本传的参数不变)
+                sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增参数透传
+                sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增参数透传
                 subset='val',
                 num_folds=num_folds,
                 current_fold=current_fold,

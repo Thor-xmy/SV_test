@@ -85,6 +85,8 @@ def main():
             clip_stride=config['clip_stride'],
             score_min=config['score_min'],
             score_max=config['score_max'],
+            sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增：透传子项最低分
+            sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增：透传子项最高分
             subset='test',                # 强制指定拉取测试集
             num_folds=num_folds,
             current_fold=fold,            # 告诉 DataLoader 当前是哪一折
@@ -108,8 +110,17 @@ def main():
                 video_id = batch['video_id'][0]
 
                 # 模型预测（归一化分数 [0,1]）
-                pred_score_norm = model(video, masks).squeeze(-1).cpu().numpy()[0]
-
+                #pred_score_norm = model(video, masks).squeeze(-1).cpu().numpy()[0]
+                # 🌟 模型预测
+                outputs = model(video, masks)
+                
+                # 🌟 降维保护：判断是否开启了多分支
+                if config.get('use_sub_scores', False):
+                    # outputs 形状为 [1, 5] -> mean 后变为 [1] -> 提取标量
+                    pred_score_norm = outputs.mean(dim=-1).cpu().numpy()[0]
+                else:
+                    # 单分支原始逻辑：outputs 形状为 [1, 1]
+                    pred_score_norm = outputs.squeeze(-1).cpu().numpy()[0]
                 # 反归一化为真实分数 [5, 25]
                 pred_real = pred_score_norm * score_range + score_min
                 gt_real = gt_score_norm * score_range + score_min

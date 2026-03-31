@@ -48,8 +48,16 @@ def evaluate_checkpoint(model, dataloader, device, config):
             v_ids = batch['video_id']  # 提取视频ID
 
             score_pred = model(video, masks)
-            
-            pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
+            # 🌟 降维保护逻辑
+            if config.get('use_sub_scores', False):
+                # 将 (Batch, 5) 求均值降维到 (Batch,)
+                pred_norm = score_pred.detach().mean(dim=-1).cpu().numpy()
+            else:
+                # 原始单分支逻辑 (Batch, 1) -> (Batch,)
+                pred_norm = score_pred.detach().squeeze(-1).cpu().numpy()
+                
+            pred_scores.extend(pred_norm)
+            #pred_scores.extend(score_pred.detach().squeeze(-1).cpu().numpy())
             gt_scores.extend(score_gt.detach().cpu().numpy())
             video_ids.extend(v_ids)
 
@@ -103,6 +111,8 @@ def main():
         clip_stride=config['clip_stride'],
         score_min=config['score_min'],
         score_max=config['score_max'],
+        sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增：透传子项最低分
+        sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增：透传子项最高分
         subset='test',
         num_folds=config.get('num_folds', 4),
         current_fold=args.target_fold,
