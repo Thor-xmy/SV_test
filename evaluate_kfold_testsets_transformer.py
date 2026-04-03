@@ -122,8 +122,15 @@ def main():
                     # 单分支原始逻辑：outputs 形状为 [1, 1]
                     pred_score_norm = outputs.squeeze(-1).cpu().numpy()[0]
                 # 反归一化为真实分数 [5, 25]
-                pred_real = pred_score_norm * score_range + score_min
-                gt_real = gt_score_norm * score_range + score_min
+                # 找到乘以 score_range 的地方，改为：
+                if config.get('normalize_scores', True):
+                    pred_scores_real = pred_scores * score_range + score_min
+                    gt_scores_real = gt_scores * score_range + score_min
+                else:
+                    pred_scores_real = pred_scores  # 直接使用，别再乘了！
+                    gt_scores_real = gt_scores
+                #pred_real = pred_score_norm * score_range + score_min
+                #gt_real = gt_score_norm * score_range + score_min
                 abs_error = abs(pred_real - gt_real)
 
                 fold_results.append({

@@ -68,9 +68,15 @@ def evaluate_checkpoint(model, dataloader, device, config):
     score_min = config.get('score_min', 5.0)
     score_max = config.get('score_max', 25.0)
     score_range = score_max - score_min
-    
-    pred_scores_real = pred_scores * score_range + score_min
-    gt_scores_real = gt_scores * score_range + score_min
+    # 找到乘以 score_range 的地方，改为：
+    if config.get('normalize_scores', True):
+        pred_scores_real = pred_scores * score_range + score_min
+        gt_scores_real = gt_scores * score_range + score_min
+    else:
+        pred_scores_real = pred_scores  # 直接使用，别再乘了！
+        gt_scores_real = gt_scores
+    #pred_scores_real = pred_scores * score_range + score_min
+    #gt_scores_real = gt_scores * score_range + score_min
     
     # 计算汇总 Metrics
     metrics = compute_metrics(pred_scores_real, gt_scores_real)
@@ -113,6 +119,7 @@ def main():
         score_max=config['score_max'],
         sub_score_min=config.get('sub_score_min', 1.0), # 🌟 新增：透传子项最低分
         sub_score_max=config.get('sub_score_max', 5.0), # 🌟 新增：透传子项最高分
+        normalize_scores=config.get('normalize_scores', True), # 🌟🌟🌟 补上这句！让底层DataLoader知道不要去压缩真值！
         subset='test',
         num_folds=config.get('num_folds', 4),
         current_fold=args.target_fold,

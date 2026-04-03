@@ -70,7 +70,14 @@ class BoundedFusionRegressorMultiClip(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+                    if m.out_features == 1:
+                        nn.init.constant_(m.bias, 17.0)  # 单分支直接空投到 17 分
+                    elif m.out_features == 5:
+                        nn.init.constant_(m.bias, 3.5)   # 多分支空投到每个子项 3.5 分
+                    elif m.out_features == 6:
+                        nn.init.constant_(m.bias, 3.5) 
+                    else:
+                        nn.init.zeros_(m.bias)
 
     def forward(self, fused_features):
         """

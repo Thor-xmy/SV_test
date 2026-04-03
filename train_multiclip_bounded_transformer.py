@@ -717,6 +717,7 @@ def main():
             batch_size=config['batch_size'],
             num_workers=config['num_workers'],
             spatial_size=config.get('spatial_size', 112),
+            spatial_crop=config.get('spatial_crop', 'center'), # 🌟🌟🌟 新增这一行：将 YAML 配置传递给数据加载器
             clip_length=config['clip_length'],
             clip_stride=config['clip_stride'],
             score_min=config['score_min'],
@@ -757,6 +758,7 @@ def main():
             batch_size=config.get('test_batch_size', config['batch_size']),
             num_workers=config['num_workers'],
             spatial_size=config.get('spatial_size', 112),
+            spatial_crop=config.get('spatial_crop', 'center'), # 🌟🌟🌟 新增这一行：将 YAML 配置传递给数据加载器
             clip_length=config['clip_length'],
             clip_stride=config['clip_stride'],
             score_min=config['score_min'],
@@ -784,6 +786,7 @@ def main():
                 batch_size=config.get('val_batch_size', config['batch_size']),
                 num_workers=config['num_workers'],
                 spatial_size=config.get('spatial_size', 112),
+                spatial_crop=config.get('spatial_crop', 'center'), # 🌟🌟🌟 新增这一行：将 YAML 配置传递给数据加载器
                 clip_length=config['clip_length'],
                 clip_stride=config['clip_stride'],
                 score_min=config['score_min'],

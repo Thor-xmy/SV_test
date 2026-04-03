@@ -73,6 +73,7 @@ class VideoLevelDatasetFrames(Dataset):
                  split_seed=42,                        # Reproducible splits
                  # Other parameters
                  spatial_size=224,
+                 spatial_crop='center',  # 🌟 新增：接收裁剪策略参数
                  normalize=True,
                  use_mask=False,
                  skip_val=False,
@@ -125,6 +126,7 @@ class VideoLevelDatasetFrames(Dataset):
         self.num_folds = num_folds         # 👈 新增保存
         self.current_fold = current_fold   # 👈 新增保存
         self.spatial_size = (spatial_size, spatial_size) if isinstance(spatial_size, int) else spatial_size
+        self.spatial_crop = spatial_crop   # 🌟 保存：裁剪策略
         self.normalize = normalize
         self.use_mask = use_mask
         self.min_video_length = min_video_length
@@ -346,6 +348,19 @@ class VideoLevelDatasetFrames(Dataset):
         """Preprocess video frames: resize, normalize."""
         T, H, W, C = frames.shape
         processed_frames = []
+        # 🌟🌟🌟 新增：在循环外部摇一次骰子，确保整段视频的裁剪坐标一致
+        target_H, target_W = self.spatial_size
+        if H != target_H or W != target_W:
+            scale = max(target_H / H, target_W / W)
+            new_H, new_W = int(H * scale), int(W * scale)
+            # 如果是训练集且配置了随机裁剪，生成随机偏移量
+            if self.is_train and getattr(self, 'spatial_crop', 'center') == 'random':
+                self._current_crop_y = random.randint(0, max(0, new_H - target_H))
+                self._current_crop_x = random.randint(0, max(0, new_W - target_W))
+            else:
+                self._current_crop_y = (new_H - target_H) // 2
+                self._current_crop_x = (new_W - target_W) // 2
+        # 🌟🌟🌟 新增结束
 
         for i in range(T):
             frame = frames[i]  # (H, W, 3)
@@ -360,8 +375,8 @@ class VideoLevelDatasetFrames(Dataset):
                 frame = cv2.resize(frame, (new_W, new_H), interpolation=cv2.INTER_LINEAR)
 
                 # 2. 从中心裁剪出 112x112
-                start_y = (new_H - target_H) // 2
-                start_x = (new_W - target_W) // 2
+                start_y = self._current_crop_y
+                start_x = self._current_crop_x
                 frame = frame[start_y : start_y + target_H, start_x : start_x + target_W]
             #if H != self.spatial_size[0] or W != self.spatial_size[1]:
                 #frame = cv2.resize(frame, self.spatial_size, interpolation=cv2.INTER_LINEAR)
@@ -409,8 +424,8 @@ class VideoLevelDatasetFrames(Dataset):
                 new_H, new_W = int(H * scale), int(W * scale)
                 m = cv2.resize(m, (new_W, new_H), interpolation=cv2.INTER_NEAREST)
 
-                start_y = (new_H - video_H) // 2
-                start_x = (new_W - video_W) // 2
+                start_y = getattr(self, '_current_crop_y', (new_H - video_H) // 2)
+                start_x = getattr(self, '_current_crop_x', (new_W - video_W) // 2)
                 m = m[start_y : start_y + video_H, start_x : start_x + video_W]
             #if H != video_H or W != video_W:
                 #m = cv2.resize(m, (video_W, video_H), interpolation=cv2.INTER_NEAREST)
@@ -556,6 +571,7 @@ def create_dataloader_with_split(data_root,
                               batch_size=4,
                               num_workers=4,
                               spatial_size=224,
+                              spatial_crop='center', # 🌟 接收外部传参
                               # Data splitting
                               subset='train',
                               train_ratio=0.7,
@@ -609,6 +625,7 @@ def create_dataloader_with_split(data_root,
         sub_score_max=sub_score_max,  # 🌟 传给 Dataset
         normalize_scores=normalize_scores, # 🌟 传给 Dataset
         spatial_size=spatial_size,
+        spatial_crop=spatial_crop,    # 🌟 传给 Dataset
         is_train=is_train,
         **kwargs
     )
