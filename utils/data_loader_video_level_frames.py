@@ -644,7 +644,7 @@ def create_dataloader_with_split(data_root,
         shuffle=is_train,
         num_workers=num_workers,
         pin_memory=True,
-        drop_last=is_train
+        drop_last=False,
         worker_init_fn=worker_init_fn  # 🌟 核心修改：挂载 worker 初始化函数
     )
 

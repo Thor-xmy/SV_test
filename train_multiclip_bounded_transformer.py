@@ -277,8 +277,8 @@ def train_epoch(model, dataloader, optimizer, device, epoch, config, scaler=None
         classname = m.__class__.__name__
         if classname.find('BatchNorm') != -1:
             m.eval()
-    #model.apply(freeze_bn)
-    model.dynamic_extractor.apply(freeze_bn)
+    model.apply(freeze_bn)
+    #model.dynamic_extractor.apply(freeze_bn)
     #=====================================================================
 
     loss_meter = AverageMeter()
@@ -843,8 +843,8 @@ def main():
             # ==========================================================
             # 保存当前折的最佳模型，并用它在测试集上跑一次最终成绩
             # 改进的保存逻辑：Spearman 更高，或者 Spearman 相同但 Loss 更低
-            if val_metrics['spearman'] > best_val_spearman or \
-               (val_metrics['spearman'] == best_val_spearman and val_loss < best_val_loss_for_tie):
+            if epoch >= 50 and (val_metrics['spearman'] > best_val_spearman or \
+               (val_metrics['spearman'] == best_val_spearman and val_loss < best_val_loss_for_tie)):
                 
                 best_val_spearman = val_metrics['spearman']
                 best_val_loss_for_tie = val_loss  # 记录当前最小 Loss
